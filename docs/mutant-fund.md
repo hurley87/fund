@@ -10,6 +10,75 @@ Team "Glitch" is building for The Synthesis hackathon (deadline March 22, 2026).
 
 **Terminology:** In this doc, **trader** and **mutant** refer to the same unit: one population member with its own genome, execution wallet, trade history, ERC-8004 identity, and **one Bankr-launched token** on Base. Depositors can spawn new mutants over time; the rows below describe the **seed traders** we launch at demo time.
 
+**Doc vs code today:** This repository is still mostly scaffold; there is no implemented pipeline that creates trader images or syncs metadata to Bankr yet. The sections below define the **intended** source-of-truth model. Until code lands, names and symbols live in this doc’s seed matrix and in planned Supabase columns.
+
+---
+
+## Trader and token metadata
+
+### Why a single `TraderProfile`
+
+Earlier versions of this doc implied “metadata + optional social proof URL” at launch but did not define a concrete object. Every surface that needs a consistent story (Bankr token metadata, dashboard cards, `skill.md`, optional ERC-8004 or offchain references) should read from **one** record per mutant — not duplicated strings in three places.
+
+### `TraderProfile` fields (source of truth)
+
+| Field | Purpose |
+|-------|---------|
+| `traderName` | Short label (e.g. Sprint, Reverb) — matches seed roster / `trader_name` in DB |
+| `tokenName` | Full token name passed to Bankr (e.g. Mutant Sprint) |
+| `tokenSymbol` | Ticker (e.g. `SPRINT`) |
+| `description` | Short description for Bankr onchain token metadata (max **500** characters per [Token Deploy API](https://docs.bankr.bot/token-launching/deploy-api)) |
+| `themeKey` | Stable id for visual/copy theme (e.g. `sprint-momentum`) |
+| `visualMotifs` | Bullet list or short notes: palette, shapes, mood — feeds prompts and UI tokens |
+| `imagePrompt` | Exact prompt used (or last-used) for OpenAI image generation — reproducibility |
+| `imageUrl` | **Public** URL of the logo/hero image — stored in **Supabase Storage**, not IPFS for this project |
+| `websiteUrl` | Project site for token metadata — default **`https://mutant.fund`** for all seed traders unless a dedicated per-mutant URL exists later |
+| `tweetUrl` | Optional social proof link for Bankr metadata |
+
+**Separation of concerns:** `TraderProfile` is **brand/display** metadata. Keep it separate from **operational** fields: `genome`, `fitness`, `wallet_address`, `fee_treasury_address`, pool ids, tx hashes. The same `TraderProfile` payload (or a subset) is what you send to Bankr; trading state stays in other columns.
+
+### How metadata is created (end-to-end)
+
+1. **Seed brief** — Strategy, personality, and theme for the trader (from the roster row + design notes).
+2. **Structured text** — Use OpenAI **text** generation to produce or refine `tokenName`, `tokenSymbol`, `description`, `themeKey`, `visualMotifs`, and an `imagePrompt` (JSON or structured output is fine; pin model snapshots in production).
+3. **Image** — Use OpenAI **image** generation from `imagePrompt` (same API key as step 2). Export PNG (or WebP for the app; Bankr accepts a URL — confirm acceptable formats in Bankr docs before launch).
+4. **Host on Supabase Storage** — Upload to a public bucket (e.g. `trader-assets/{mutant_id}/logo.png`). The **public object URL** becomes `imageUrl`. We are **not** using IPFS for Mutant Fund assets.
+5. **Bankr launch** — Call `bankr launch` (CLI) or `POST /token-launches/deploy` with at least `tokenName`, optional `tokenSymbol`, `description`, `image` = `imageUrl`, `websiteUrl` = `https://mutant.fund`, optional `tweetUrl`, and `feeRecipient` per trader treasury. Bankr may mirror/upload imagery into their own metadata pipeline; our canonical hosted asset remains Supabase unless we intentionally change that.
+6. **Mirror in Supabase** — Persist the same fields on the `mutants` row (see schema) so API and dashboard stay consistent with chain-facing metadata.
+
+### Theme consistency (required)
+
+Every trader must align **name**, **token name/symbol**, **description**, **image**, **dashboard card styling** (Tailwind tokens keyed off `themeKey`), and any **micro-site** copy to one coherent theme. Random mismatches (e.g. “calm zen” copy on a neon chaos logo) fail review before launch.
+
+### OpenAI + Bankr handoff
+
+- **One OpenAI API key** can drive both text metadata and image generation; scope it to server-side scripts or secured API routes only — never expose in client bundles.
+- **Bankr Token Deploy API** fields we rely on: `tokenName`, `tokenSymbol`, `description`, `image`, `tweetUrl`, `websiteUrl`, `feeRecipient`. See [Token Deploy API](https://docs.bankr.bot/token-launching/deploy-api) and [Token Launching overview](https://docs.bankr.bot/token-launching/overview) (CLI `bankr launch` supports `--image`, etc.).
+- **Same object for token metadata?** **Yes** — the `TraderProfile` subset (`tokenName`, `tokenSymbol`, `description`, `image`, `websiteUrl`, `tweetUrl`) is exactly what Bankr stores as token metadata. **No** — do not stuff genome, fitness, or treasury routing into the “description” field; keep those in the DB and contracts.
+
+### Flow
+
+```mermaid
+flowchart TD
+    traderBrief[TraderBrief]
+    metadataGen[OpenAITextMetadata]
+    imageGen[OpenAIImageGeneration]
+    supabaseStorage[SupabaseStorage]
+    bankrLaunch[BankrTokenLaunch]
+    appDb[SupabaseMutants]
+    appUi[DashboardAndSkillMd]
+
+    traderBrief --> metadataGen
+    metadataGen --> imageGen
+    imageGen --> supabaseStorage
+    metadataGen --> bankrLaunch
+    supabaseStorage --> bankrLaunch
+    metadataGen --> appDb
+    supabaseStorage --> appDb
+    appDb --> appUi
+    bankrLaunch --> appUi
+```
+
 ---
 
 ## Architecture
@@ -46,7 +115,7 @@ Agent/Human → skill.md / API → Escrow Contract (Base) → Mints ERC-8004 Mut
 - Describes fund mechanics, API endpoints, and how to invest
 - REST API (Next.js API routes):
   - `POST /api/invest` — agent sends USDC, gets a mutant (calls escrow contract)
-  - `GET /api/mutants` — list all mutants with genomes, fitness, PnL, **`capital_allocation`**, **`lifecycle_status`**, **`correlation_score`** / **`novelty_score`** when computed, **trader token address + pool id (if available)**
+  - `GET /api/mutants` — list all mutants with genomes, fitness, PnL, **`capital_allocation`**, **`lifecycle_status`**, **`correlation_score`** / **`novelty_score`** when computed, **trader token address + pool id (if available)**, and **`TraderProfile`** mirror fields (`trader_description`, **`theme_key`**, **`image_url`**, **`website_url`**) when implemented
   - `GET /api/mutants/:id` — specific mutant details + trade history + **onchain token + fee routing metadata**
   - `GET /api/evolution` — current generation, recent mutations, **tier counts** (elite / survivor / offspring / exploration), **capital allocation shifts**, **revival events** per cycle
   - `POST /api/revive` — pay revival fee → spawn **probationary clone** of a culled mutant (see Evolutionary Engine); validate cooldowns; fee routes to treasury / exploration pool (stub escrow acceptable for hackathon)
@@ -144,7 +213,7 @@ This maps directly to Synthesis / Bankr judging emphasis: **real execution, real
 
 | Trader (mutant) | Strategy | Proposed token name | Symbol | Chain | Launch path | Fee / treasury destination | Evidence we ship |
 |-----------------|----------|---------------------|--------|-------|-------------|----------------------------|------------------|
-| **Sprint** | Momentum / trend (Bankr Avantis) | Mutant Sprint | `SPRINT` | Base | `bankr launch` (or API equivalent) per trader; metadata + optional social proof URL | Dedicated **per-trader** wallet / ENS / `@handle` as Bankr **fee recipient** → proceeds fund **that** trader’s LLM credits or auto top-up | Base **token contract** + **pool** identifiers; **launch tx**; ≥1 **swap** or pool activity tx; **fee claim** or split config screenshot / tx; **LLM** usage line item or credit top-up tied to trader id |
+| **Sprint** | Momentum / trend (Bankr Avantis) | Mutant Sprint | `SPRINT` | Base | `TraderProfile` → `bankr launch` or `POST /token-launches/deploy`; `websiteUrl` **`https://mutant.fund`**; `image` = public Supabase Storage URL; optional `tweetUrl` | Dedicated **per-trader** wallet / ENS / `@handle` as Bankr **fee recipient** → proceeds fund **that** trader’s LLM credits or auto top-up | Base **token contract** + **pool** identifiers; **launch tx**; ≥1 **swap** or pool activity tx; **fee claim** or split config screenshot / tx; **LLM** usage line item or credit top-up tied to trader id |
 | **Reverb** | Mean-reversion (Uniswap spot bias) | Mutant Reverb | `REVERB` | Base | Same | Same (isolated treasury for Reverb) | Same checklist |
 | **Carry** | Funding / basis arb (Bankr Avantis) | Mutant Carry | `CARRY` | Base | Same | Same (isolated treasury for Carry) | Same checklist |
 | **Omen** | Discretionary / multi-model narrative (heavy LLM Gateway) | Mutant Omen | `OMEN` | Base | Same | Same; optionally higher fee % to treasury to demo **inference-funded** edge | Same checklist + explicit **model call logs** (redact secrets) in Supabase per `mutant_id` |
@@ -153,12 +222,12 @@ This maps directly to Synthesis / Bankr judging emphasis: **real execution, real
 
 **P1 — Next.js Dashboard (Vercel)**
 - Landing page: "Your money, evolved" + invest CTA
-- Live dashboard: all mutants, traits, fitness, PnL
+- Live dashboard: all mutants, traits, fitness, PnL; cards use **`theme_key`** + **`image_url`** for consistent visuals with token metadata
 - Evolution timeline: visual history of generations, mutations, culls
 - Mutant detail page: genome visualization, trade history, lineage tree, **trader token contract + pool links (Basescan)**, fee routing summary
 - Supabase for caching trade history + evolution logs (faster than querying chain)
 
-**P2 — Per-Mutant Micro-Sites (Locus, Stretch)**
+**P2 — Per-Mutant Micro-Sites (Locus)**
 - Each mutant gets its own micro-site deployed via Locus Build API
 - Shows that mutant's genome, trade history, fitness, and lineage
 - Demonstrates Locus's fullstack deployment capability
@@ -192,6 +261,8 @@ This maps directly to Synthesis / Bankr judging emphasis: **real execution, real
 
 ### Project scaffold
 - [ ] Set up Supabase (tables: mutants, trades, evolution_logs)
+- [ ] Supabase Storage: public bucket for trader logos (e.g. `trader-assets/`); document RLS / public read policy for hackathon demo
+- [ ] Env: `OPENAI_API_KEY` (server-only) for `TraderProfile` text + image generation scripts or secured routes
 
 ### Agent interface + onchain
 - [ ] Write `public/skill.md` — fund mechanics + API for agents
@@ -207,8 +278,9 @@ This maps directly to Synthesis / Bankr judging emphasis: **real execution, real
 
 ### Trading + economics
 - [ ] Bankr Agent API (Avantis); Uniswap swaps; Locus + spending controls
+- [ ] **Trader metadata:** define seed `TraderProfile` records (theme, description ≤500 chars, `imagePrompt`); generate images via OpenAI; upload to Supabase Storage; set `websiteUrl` to **`https://mutant.fund`** on every Bankr deploy unless a per-mutant site URL exists
 - [ ] **Per-trader token roster:** lock seed names/symbols (Sprint, Reverb, Carry, Omen) or update matrix + env/config
-- [ ] **Launch one Bankr token per seed trader** on Base (`bankr launch … --yes` or scripted); store **contract + pool + launch tx** in Supabase
+- [ ] **Launch one Bankr token per seed trader** on Base (`bankr launch … --yes` or `POST /token-launches/deploy`); pass `description`, `image` (Supabase public URL), `websiteUrl`; store **contract + pool + launch tx** + mirrored profile fields in Supabase
 - [ ] **Fee routing:** configure [fee splitting / redirect](https://docs.bankr.bot/token-launching/fee-splitting) so each trader’s **creator share** flows to **that trader’s treasury** (dedicated Bankr sub-wallet or labeled wallet per mutant)
 - [ ] **Fund inference per trader:** allocate claimed fees or LLM credits so **LLM Gateway** usage for mutant `id` is attributable (dashboard + logs); optional **auto top-up** per [LLM Gateway credits](https://docs.bankr.bot/llm-gateway/overview)
 - [ ] **OpenClaw / agents:** install [Bankr skill](https://docs.bankr.bot/openclaw/installation) for demos where an agent performs launch/trade helpers; keep **dedicated agent API keys** per Bankr guidance
@@ -287,7 +359,8 @@ mutant-fund/
 │   │   │   └── supabase.ts   # Supabase client + queries
 │   │   └── config/
 │   │       ├── risk.ts       # Hardcoded risk guardrails
-│   │       └── env.ts        # Environment + API keys
+│   │       ├── env.ts        # Environment + API keys
+│   │       └── trader-profiles.ts  # Seed TraderProfile constants + theme keys (source for Bankr + UI)
 │   └── components/
 │       ├── mutant-card.tsx   # Mutant display card with genome traits
 │       ├── evolution-timeline.tsx # Visual evolution history
@@ -312,6 +385,13 @@ create table mutants (
   token_id integer unique,          -- ERC-8004 NFT token ID
   wallet_address text,              -- Agent's wallet on Base
   trader_name text,                 -- e.g. Sprint, Reverb (seed trader label)
+  trader_description text,         -- short copy; mirror Bankr token description (max 500 chars on deploy)
+  theme_key text,                   -- e.g. sprint-momentum; drives dashboard / card styling
+  image_url text,                   -- public Supabase Storage URL passed to Bankr `image`
+  image_prompt text,                -- last OpenAI image prompt (reproducibility)
+  website_url text default 'https://mutant.fund', -- Bankr `websiteUrl`; override if per-mutant site
+  tweet_url text,                   -- optional Bankr `tweetUrl`
+  metadata_version integer default 1 not null,  -- bump when profile fields change post-launch
   trader_token_address text,        -- ERC-20 on Base (Bankr-launched)
   trader_token_symbol text,
   trader_pool_id text,              -- Uniswap v4 pool id or pool address (as returned by Bankr tooling)
@@ -426,6 +506,9 @@ Together this demonstrates **real execution**, **real onchain outcomes**, and **
 ---
 
 ## Sources
+- [OpenAI API — Text generation](https://platform.openai.com/docs/guides/text-generation)
+- [OpenAI API — Image generation](https://platform.openai.com/docs/guides/image-generation)
+- [Bankr Token Deploy API](https://docs.bankr.bot/token-launching/deploy-api)
 - [Synthesis Official Site](https://synthesis.md/)
 - [Synthesis Hack — partner bounties (incl. Bankr)](https://synthesis.md/hack/#bankr)
 - [Prize Catalog](https://synthesis.devfolio.co/catalog/prizes.md)
