@@ -8,6 +8,8 @@ Team "Glitch" is building for The Synthesis hackathon (deadline March 22, 2026).
 
 **Agent-first design:** Build for agents first (skill.md + API), human UI second. Other hackathon agents can discover and invest in Mutant Fund programmatically.
 
+**Terminology:** In this doc, **trader** and **mutant** refer to the same unit: one population member with its own genome, execution wallet, trade history, ERC-8004 identity, and **one Bankr-launched token** on Base. Depositors can spawn new mutants over time; the rows below describe the **seed traders** we launch at demo time.
+
 ---
 
 ## Architecture
@@ -22,6 +24,9 @@ Agent/Human → skill.md / API → Escrow Contract (Base) → Mints ERC-8004 Mut
                   ↓               ↓               ↓
             Mutant A        Mutant B        Mutant C  ...
             (momentum)    (mean-revert)    (funding-arb)
+                  ↓               ↓               ↓
+         Bankr token      Bankr token      Bankr token
+         (Base + LP)     (Base + LP)      (Base + LP)
                   ↓               ↓               ↓
             Bankr API       Uniswap API     Bankr API
             (Avantis)       (swaps)         (Avantis)
@@ -41,8 +46,8 @@ Agent/Human → skill.md / API → Escrow Contract (Base) → Mints ERC-8004 Mut
 - Describes fund mechanics, API endpoints, and how to invest
 - REST API (Next.js API routes):
   - `POST /api/invest` — agent sends USDC, gets a mutant (calls escrow contract)
-  - `GET /api/mutants` — list all mutants with genomes, fitness, PnL
-  - `GET /api/mutants/:id` — specific mutant details + trade history
+  - `GET /api/mutants` — list all mutants with genomes, fitness, PnL, **trader token address + pool id (if available)**
+  - `GET /api/mutants/:id` — specific mutant details + trade history + **onchain token + fee routing metadata**
   - `GET /api/evolution` — current generation, recent mutations, survival rates
   - `GET /api/status` — fund health, total AUM, active mutants
 - Other hackathon agents can discover and invest via skill.md
@@ -85,20 +90,41 @@ Agent/Human → skill.md / API → Escrow Contract (Base) → Mints ERC-8004 Mut
 - **Locus** — autonomous USDC payments with spending controls
 - **Bankr LLM Gateway** (llm.bankr.bot) — multi-model analysis (Claude for reasoning, GPT for data parsing, Gemini for speed)
 
-**P0 — Per-Mutant Token Launch (Self-Sustaining Economics)**
-- Each mutant launches its own token via Bankr Token Deploy API
-- Token represents "shares" / belief in that mutant's strategy
-- Trading fees from the token redirect to fund that mutant's LLM inference via Bankr LLM Gateway
-- Self-sustaining loop: mutant trades → attracts token buyers → fees fund inference → better analysis → better trades
-- Failing mutants: token dumps → less fees → can't afford inference → culled
-- This IS the natural selection mechanism — money as energy
-- Directly targets Bankr "self-sustaining economics" bonus
+**P0 — Per-Trader Token Launch (Self-Sustaining Economics)**
+
+Each **trader (mutant)** gets **one token deployment on Base** via Bankr (CLI `bankr launch`, headless flags, or Token Strategist / agent skill). The token is the trader’s **onchain economic surface**: liquidity, swap fees, and (where configured) **fee routing** back into that trader’s inference budget.
+
+**How Bankr supports this (mechanics we rely on)**
+
+- Launches default to **Base**; a **liquidity pool** is created so the token is immediately tradable ([Token Launching overview](https://docs.bankr.bot/token-launching/overview)).
+- **Swap fees accumulate** on trades; creators claim their share via Terminal or prompts ([claiming fees](https://docs.bankr.bot/token-launching/claiming-fees)).
+- Default fee split includes a **creator share** (~57% of the 1.2% pool fee per Bankr docs); use **[fee redirecting / splitting](https://docs.bankr.bot/token-launching/fee-splitting)** to route creator proceeds to a **per-trader treasury** (wallet or collaborator recipient) that funds that trader only.
+- **[LLM Gateway](https://docs.bankr.bot/llm-gateway/overview)** accepts payment from **launch-fee allocation** and/or **wallet top-ups** (USDC, ETH, BNKR, etc. on Base) — we tie each trader’s gateway usage or credit path to **that trader’s** fee/treasury story so judges see **real spend** behind **real inference**.
+
+**Closed loop (per trader)**
+
+1. Trader runs strategy → real positions / swaps on Base (tx receipts).
+2. Trader’s token trades on its pool → **fees accrue** → claimed or auto-routed per policy → **tops up LLM** for that same trader’s `llm.bankr.bot` calls (multi-model analysis in `multi-model.ts`).
+3. Weaker traders: lower attention / volume → less fee flow → tighter inference budget → worse edge → lower fitness → **culled** in evolution.
+
+This maps directly to Synthesis / Bankr judging emphasis: **real execution, real onchain outcomes**, and **bonus** for **self-sustaining economics** (routing launch fees, trading revenue, or protocol-like fees into **that agent’s own inference**). See [Synthesis Hack — Bankr track](https://synthesis.md/hack/#bankr).
+
+**Per-trader token deployment matrix (initial seed roster)**
+
+| Trader (mutant) | Strategy | Proposed token name | Symbol | Chain | Launch path | Fee / treasury destination | Evidence we ship |
+|-----------------|----------|---------------------|--------|-------|-------------|----------------------------|------------------|
+| **Sprint** | Momentum / trend (Bankr Avantis) | Mutant Sprint | `SPRINT` | Base | `bankr launch` (or API equivalent) per trader; metadata + optional social proof URL | Dedicated **per-trader** wallet / ENS / `@handle` as Bankr **fee recipient** → proceeds fund **that** trader’s LLM credits or auto top-up | Base **token contract** + **pool** identifiers; **launch tx**; ≥1 **swap** or pool activity tx; **fee claim** or split config screenshot / tx; **LLM** usage line item or credit top-up tied to trader id |
+| **Reverb** | Mean-reversion (Uniswap spot bias) | Mutant Reverb | `REVERB` | Base | Same | Same (isolated treasury for Reverb) | Same checklist |
+| **Carry** | Funding / basis arb (Bankr Avantis) | Mutant Carry | `CARRY` | Base | Same | Same (isolated treasury for Carry) | Same checklist |
+| **Omen** | Discretionary / multi-model narrative (heavy LLM Gateway) | Mutant Omen | `OMEN` | Base | Same | Same; optionally higher fee % to treasury to demo **inference-funded** edge | Same checklist + explicit **model call logs** (redact secrets) in Supabase per `mutant_id` |
+
+*Addresses in the matrix are filled at deploy time and mirrored in Supabase + dashboard + `skill.md` for agents.*
 
 **P1 — Next.js Dashboard (Vercel)**
 - Landing page: "Your money, evolved" + invest CTA
 - Live dashboard: all mutants, traits, fitness, PnL
 - Evolution timeline: visual history of generations, mutations, culls
-- Mutant detail page: genome visualization, trade history, lineage tree
+- Mutant detail page: genome visualization, trade history, lineage tree, **trader token contract + pool links (Basescan)**, fee routing summary
 - Supabase for caching trade history + evolution logs (faster than querying chain)
 
 **P2 — Per-Mutant Micro-Sites (Locus, Stretch)**
@@ -122,7 +148,7 @@ Agent/Human → skill.md / API → Escrow Contract (Base) → Mints ERC-8004 Mut
 |---|---|---|
 | **Synthesis Open Track** | **$28,309** | Full "Agents That Pay" product — autonomous fund with skill.md for agent-to-agent investment |
 | **Autonomous Trading Agent (Base)** | **$5,000** | Novel evolutionary strategy with real trades on Base |
-| **Best Bankr LLM Gateway Use** | **$4,500** | Multi-model reasoning for trade analysis + self-sustaining economics |
+| **Best Bankr LLM Gateway Use** | **$4,500** | Multi-model reasoning per trader + **per-trader token fees → LLM Gateway** (documented txs + usage); align with Bankr judging: real execution, real onchain outcomes, self-sustaining economics |
 | **Agentic Finance (Uniswap)** | **$5,000** | Real Uniswap swaps on Base mainnet with TxIDs |
 | **Let the Agent Cook (Protocol Labs)** | **$3,500** | Complete autonomous loop: discover→plan→execute→verify, ERC-8004 |
 | **Agents With Receipts (Protocol Labs)** | **$3,500** | ERC-8004 identity per mutant, full onchain verifiability |
@@ -134,11 +160,7 @@ Agent/Human → skill.md / API → Escrow Contract (Base) → Mints ERC-8004 Mut
 ## Implementation Plan (tasks)
 
 ### Project scaffold
-- [ ] Create repo `mutant-fund/` (or use existing)
-- [ ] Initialize Next.js with TypeScript, pnpm, Tailwind
-- [ ] Install: viem, wagmi, @bankr/cli, Uniswap SDK (as needed)
 - [ ] Set up Supabase (tables: mutants, trades, evolution_logs)
-- [ ] Set up environment variables (including `CRON_SECRET` for the cron route)
 
 ### Agent interface + onchain
 - [ ] Write `public/skill.md` — fund mechanics + API for agents
@@ -152,7 +174,11 @@ Agent/Human → skill.md / API → Escrow Contract (Base) → Mints ERC-8004 Mut
 
 ### Trading + economics
 - [ ] Bankr Agent API (Avantis); Uniswap swaps; Locus + spending controls
-- [ ] Bankr Token Deploy per mutant; fee redirect → LLM inference; Bankr LLM Gateway for analysis
+- [ ] **Per-trader token roster:** lock seed names/symbols (Sprint, Reverb, Carry, Omen) or update matrix + env/config
+- [ ] **Launch one Bankr token per seed trader** on Base (`bankr launch … --yes` or scripted); store **contract + pool + launch tx** in Supabase
+- [ ] **Fee routing:** configure [fee splitting / redirect](https://docs.bankr.bot/token-launching/fee-splitting) so each trader’s **creator share** flows to **that trader’s treasury** (dedicated Bankr sub-wallet or labeled wallet per mutant)
+- [ ] **Fund inference per trader:** allocate claimed fees or LLM credits so **LLM Gateway** usage for mutant `id` is attributable (dashboard + logs); optional **auto top-up** per [LLM Gateway credits](https://docs.bankr.bot/llm-gateway/overview)
+- [ ] **OpenClaw / agents:** install [Bankr skill](https://docs.bankr.bot/openclaw/installation) for demos where an agent performs launch/trade helpers; keep **dedicated agent API keys** per Bankr guidance
 - [ ] Execute real trades on Base; fund mutant wallets (~$50–100 total)
 
 ### Vercel Cron (orchestrator)
@@ -246,6 +272,12 @@ create table mutants (
   id uuid primary key default gen_random_uuid(),
   token_id integer unique,          -- ERC-8004 NFT token ID
   wallet_address text,              -- Agent's wallet on Base
+  trader_name text,                 -- e.g. Sprint, Reverb (seed trader label)
+  trader_token_address text,        -- ERC-20 on Base (Bankr-launched)
+  trader_token_symbol text,
+  trader_pool_id text,              -- Uniswap v4 pool id or pool address (as returned by Bankr tooling)
+  bankr_launch_tx_hash text,       -- Token deploy / launch tx on Base
+  fee_treasury_address text,        -- Where creator fees are directed (per-trader)
   genome jsonb not null,            -- Strategy parameters
   fitness float default 0,
   pnl float default 0,
@@ -303,7 +335,7 @@ create table evolution_logs (
 ## Verification
 
 1. Visit `mutantfund.vercel.app/skill.md` — other agents can read it
-2. Call `GET /api/mutants` — returns live mutant population
+2. Call `GET /api/mutants` — returns live mutant population **including per-trader token addresses**
 3. Check Base transactions on Basescan for real trade TxIDs
 4. Verify ERC-8004 NFTs minted on Base
 5. Confirm evolutionary cycles ran (genome changes across generations in Supabase) and Vercel Cron executed the orchestrator route (project logs / Cron Jobs UI)
@@ -312,6 +344,20 @@ create table evolution_logs (
 8. Confirm Locus spending controls active
 9. Ensure GitHub repo is public with full README
 10. Dashboard shows live mutant population + evolution timeline
+
+**Per-trader token + economics (Bankr / Synthesis judging)**
+
+For **each** seed trader (Sprint, Reverb, Carry, Omen), confirm:
+
+| # | Check | Pass criteria |
+|---|--------|----------------|
+| T1 | Token deployed on Base | Live **ERC-20 contract** on Basescan; matches `trader_token_address` in DB/API |
+| T2 | Liquidity / tradability | **Pool** exists and is linked from dashboard or docs (id/address from Bankr or indexer) |
+| T3 | Onchain activity | At least **one** of: swap tx touching the pool, **fee accrual** visible via Bankr UI, or **claim** tx for that token’s creator share |
+| T4 | Fee → inference story | **Documented** path: treasury address + **LLM Gateway** credit top-up or usage attributable to that `mutant_id` (logs, dashboard, or README table) |
+| T5 | Strategy execution | ≥ **one** real **trade tx** (Avantis or Uniswap) attributed to that trader in `trades` + Basescan |
+
+Together this demonstrates **real execution**, **real onchain outcomes**, and **self-sustaining economics** (token / trading adjacent fees feeding **that** agent’s inference).
 
 ---
 
@@ -324,15 +370,24 @@ create table evolution_logs (
 > No single strategy to blow up. No black box. Every trade and mutation logged onchain. Human guardrails enforced by smart contract.
 >
 > Jim Simons proved that running many uncorrelated, constantly-adapting strategies beats any single bet. We made that autonomous. Darwin meets DeFi."
+>
+> Each trader also **launches its own token on Base**: swap fees and configured splits **route into that trader’s treasury**, which **funds its own LLM inference** via Bankr’s gateway — selection pressure isn’t only PnL, it’s **whether the token economy can pay for the agent’s brain**.
 
 ---
 
 ## Sources
 - [Synthesis Official Site](https://synthesis.md/)
+- [Synthesis Hack — partner bounties (incl. Bankr)](https://synthesis.md/hack/#bankr)
 - [Prize Catalog](https://synthesis.devfolio.co/catalog/prizes.md)
 - [Synthesis skill.md](https://synthesis-hackathon.vercel.app/skill.md)
 - [GitHub: sodofi/synthesis-hackathon](https://github.com/sodofi/synthesis-hackathon)
 - [Bankr Docs](https://docs.bankr.bot)
+- [Bankr LLM Gateway — overview](https://docs.bankr.bot/llm-gateway/overview)
+- [Bankr Token Launching — overview](https://docs.bankr.bot/token-launching/overview)
+- [Bankr Token Launching — fee splitting / redirect](https://docs.bankr.bot/token-launching/fee-splitting)
+- [Bankr Token Launching — claiming fees](https://docs.bankr.bot/token-launching/claiming-fees)
+- [Bankr Skill — OpenClaw installation](https://docs.bankr.bot/openclaw/installation)
+- [Bankr Token Strategist skill (GitHub)](https://github.com/BankrBot/token-strategist)
 - [Uniswap AI Skills](https://github.com/Uniswap/uniswap-ai)
 - [ERC-8004 Spec](https://eips.ethereum.org/EIPS/eip-8004)
 - [CROPS Design Coach](https://www.cropsdesign.com/coach/SKILL.md)
