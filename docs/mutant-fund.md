@@ -228,6 +228,71 @@ This section is the default **source of truth** for "how do trades execute?" and
 - `culled` — not eligible to trade until revived
 - `probation_revival` — revived mutant with capped sizing and temporary breeding restrictions
 
+### Trader decision inputs, tradable assets, and what is available
+
+This subsection answers three questions in one place: **what data drives a decision**, **which coins/assets are in scope**, and **what information exists today** vs only in the spec or future code.
+
+#### Three different “coins” (do not conflate them)
+
+| Layer | Role | Examples in Mutant Fund |
+|-------|------|-------------------------|
+| **Bankroll / escrow** | Capital deposited and risk-managed per mutant; sizing is USDC-denominated. | USDC in per-mutant escrow (see escrow + schema). |
+| **Underlying traded assets** | What a strategy may **long / short / swap** on Base per venue rules — this is the **trading universe**, not the Bankr meme token. | ETH, BTC, SOL and other **liquid majors** as allowed per strategy row in the router table below; genome **`asset preference`** narrows within that allowlist. |
+| **Per-trader Bankr ERC-20** | Each seed mutant’s **launched token** — liquidity, fees, treasury → LLM economics; **not** the default perp/spot leg unless you explicitly add a rule. | `SPRINT`, `REVERB`, `CARRY`, `OMEN` on Base (see per-trader token matrix). |
+
+**What the trader “trades” for PnL demos:** the **underlying** column in the deterministic router (e.g. Sprint → ETH/BTC/SOL majors on Avantis; Reverb → wrapped majors on Uniswap spot). The **Bankr token** is parallel **agent economics**, documented separately.
+
+#### What data a trader uses to decide
+
+Decisions are **evaluation-driven** (see execution model above): each tick loads inputs, produces `trade` or `no-trade`, then risk and limits may block execution.
+
+| Input category | Purpose | Concrete examples (MVP spec) |
+|----------------|---------|------------------------------|
+| **Market data** | Snapshot metrics + ranked pair lists (no OHLCV candle arrays). | **(B) DexScreener** — Base pairs, allowlist filters, **m5/h1/h6/h24** price change, volume, liquidity, tx counts (see below). **No candle APIs.** **Carry (true funding arb)** still needs **funding / OI** (not on DexScreener) → **`no_trade_signal`** / **paper** until a venue funding feed is wired. |
+| **Verified agent signals** | Tx-backed **LONG/SHORT/BUY/SELL** signals + provider track records on Base. | **(A) Bankr Signals** — public **feed**, **leaderboard**, filtered **`/api/signals`**; optional **webhooks**. Use as a **prior or filter**, never as a bypass for `risk.ts` / venue rules. Skill: [`bankr-signals/SKILL.md`](https://github.com/BankrBot/skills/blob/main/bankr-signals/SKILL.md). |
+| **Strategy / internal state** | Parameters and context that turn market data into a signal. | **Genome**: signal type (momentum / mean-revert / funding-arb), leverage, stop/take-profit bands, **asset preference**, timeframe, position-size % of effective notional; **open positions** / margin picture (`reserved_margin`, etc. when synced); **last** `last_trade_at`, `trades_today`, `last_signal_status`; optional **cohort** hints for fitness (`correlation_score`, `novelty_score`) — used heavily in **evolution**, and optionally to avoid crowding in the trading loop if wired. |
+| **Risk and execution limits** | Hard gates after a signal exists. | Max leverage **10x**, max single position **30%** of effective capital, **20%** fund drawdown halt, **15 min** min between trades, **20** max daily trades per mutant, `capital_allocation` (zero = benched), lifecycle (`culled`, halt flags, optional redemption freeze). Centralized in **`src/lib/config/risk.ts`** when implemented. |
+| **Narrative / LLM (optional)** | Discretionary or multi-model overlay; must not bypass risk modules. | **Bankr LLM Gateway** for parsing/synthesis; **Omen** records **decisions and reasoning** even in **paper** mode; `trades.reasoning` in the schema stores **LLM-generated reasoning** when used. No separate third-party “sentiment API” is specified in MVP. |
+
+#### DexScreener-only policy (MVP default)
+
+**Scope:** One external provider for **tradable-universe construction** and **signal inputs**: **[DexScreener](https://dexscreener.com)** (HTTP API / documented pair endpoints). **No candle pulls** — no OHLCV arrays from other providers for strategy alpha in this mode.
+
+**Solid trade list (allowlist), not “trending blindly”**
+
+1. Query **Base** pairs (search by chain, boosted/latest/trending endpoints per DexScreener API docs — pin the exact routes in code comments).
+2. **Filter** to a conservative set, e.g.:
+   - **Minimum liquidity (USD)** — floor illiquid rugs (tune in `risk.ts` / config).
+   - **Minimum volume (e.g. 24h USD)** — must trade enough to exit.
+   - **Quote token** allowlist where applicable (e.g. **USDC**, **WETH**) so execution paths stay predictable.
+   - Optional **pair age** minimum (e.g. exclude pairs younger than N hours) to reduce launch scams.
+3. **Intersect** with the deterministic router: e.g. Sprint/Reverb still only consider symbols the venue can execute (majors / wrapped majors); DexScreener supplies **addresses** (`pairAddress`, `baseToken` / `quoteToken`) for routing — map to Bankr/Uniswap execution in the adapter layer.
+
+**Signal data (from pair JSON, no candles)**
+
+Use fields DexScreener exposes on the pair object (names vary slightly by API version — normalize in `market-data.ts`):
+
+| Signal bucket | Typical DexScreener fields (conceptual) | Strategy use |
+|---------------|----------------------------------------|--------------|
+| **Multi-horizon return** | `priceChange` over **m5 / h1 / h6 / h24** (or equivalent) | **Sprint:** trend alignment (e.g. h1 and h24 same sign + magnitude thresholds). **Reverb:** extreme **h1** vs calmer **h24** as a **mean-reversion** proxy (contrarian), still without candles. |
+| **Activity** | **Volume** (e.g. h24, h6), **txn** counts (buys vs sells in window) | Confirm participation; filter noise; optional **buy/sell imbalance** as a micro signal. |
+| **Tradability** | **liquidity.usd**, **fdv** (if present) | Hard gates before sizing; reject pairs below liquidity floor. |
+| **Identity** | `chainId`, `pairAddress`, token addresses/symbols | Stable join key from signal → execution quote. |
+
+**Carry:** True **funding / basis / OI** arb is **not** available from DexScreener. Default behavior: **do not open Carry positions** on DexScreener-only data (`no_trade_signal` or **paper** with logged reason). Adding Avantis/Bankr funding endpoints later is an explicit **scope change**, not part of this policy.
+
+**Operational:** Respect DexScreener **rate limits**; cache pair snapshots per orchestrator tick; log the **pair address** and **snapshot timestamp** on every decision for audit.
+
+**Fitness (evolution)** uses **realized PnL**, drawdown, turnover, inactivity vs “should have signaled” (**genome + market data**), correlation, and optional treasury/LLM spend signals — that shapes **future** genomes and `capital_allocation`, not necessarily every tick’s raw price feed.
+
+#### What information is available (honest scope)
+
+| Status | What you get |
+|--------|----------------|
+| **Specified in this doc** | Genome fields, router **allowed assets** per strategy family, cadence, outcomes (`trade_executed`, `no_trade_signal`, `blocked_by_risk`, `blocked_by_limits`), risk constants, Supabase **schema intent** (`mutants`, `trades`, `evolution_logs`), and **API** shapes described under Architecture (`GET /api/mutants`, etc.). |
+| **Available when the scaffold is implemented** | Live rows and logs from Supabase + API responses matching those fields; onchain receipts on Base (tx hashes, token/pool addresses). |
+| **Not yet in repo / not fully specified** | **DexScreener → execution mapping** (pair → Bankr/Uniswap leg), exact **threshold constants** (min liquidity/volume), **rate-limit** handling, and automated **margin sync** semantics — treat as **TBD** until `market-data.ts`, venue adapters, and cron land. **Candles:** intentionally out of scope under DexScreener-only MVP. |
+
 **Deterministic venue router (default)**
 
 Each strategy family should have one explicit venue policy so routing logic is deterministic and auditable:
@@ -236,7 +301,7 @@ Each strategy family should have one explicit venue policy so routing logic is d
 |---|---|---|---|---|---|---|
 | Momentum / trend | Sprint | **Bankr Agent API / Avantis** | ETH, BTC, SOL majors first | Yes, capped at 10x | 1h to 4h | Good fit for directional perp exposure |
 | Mean-reversion | Reverb | **Uniswap Trading API** | ETH, BTC wrappers, liquid majors | No leverage by default | 15m to 4h | Spot-biased to reduce churn and liquidation risk |
-| Funding / basis arb | Carry | **Bankr Agent API / Avantis** | Assets with stable funding + OI data | Yes, capped at 10x | 1h to 1d | Requires funding / basis inputs in market data |
+| Funding / basis arb | Carry | **Bankr Agent API / Avantis** | Assets with stable funding + OI data | Yes, capped at 10x | 1h to 1d | **DexScreener-only MVP:** no funding/OI from DexScreener — **no live Carry** until venue funding feeds are wired; otherwise `no_trade_signal` / paper. |
 | Narrative / discretionary | Omen | **Paper decision mode** first; optionally one approved live venue later | Liquid majors only until rules harden | No leverage by default | 4h to 1d | Record decisions and reasoning even when not live-trading |
 
 **Typed config surface (planned code source of truth)**
@@ -248,7 +313,7 @@ Each strategy family should have one explicit venue policy so routing logic is d
 1. Verify cron auth / lock so overlapping runs cannot double-evaluate the same mutant.
 2. Load all non-culled mutants plus global risk state.
 3. Skip mutants that are benched, halted, or inside cooldown.
-4. Fetch market data needed for that mutant’s strategy family.
+4. Fetch **DexScreener** pair set + snapshot metrics for Base (allowlist filters), scoped to that mutant’s strategy family and genome.
 5. Generate a `trade` or `no-trade` decision for that mutant.
 6. Apply risk and execution limit checks.
 7. Route to the correct venue adapter (`Bankr/Avantis`, `Uniswap`, or paper mode).
@@ -265,7 +330,7 @@ Each strategy family should have one explicit venue policy so routing logic is d
 
 **P0 — Vercel Cron + orchestrator route**
 - `vercel.json` defines a [`crons`](https://vercel.com/docs/cron-jobs) entry pointing at a single secured API route (e.g. `GET /api/cron/orchestrator`) with default schedule `*/15 * * * *`
-- Route handler runs one **trading** cycle: fetch market data → each mutant trade/no-trade → route to Bankr / Uniswap / paper mode → append Supabase logs and update execution state
+- Route handler runs one **trading** cycle: fetch **DexScreener** pair snapshots (allowlisted) → each mutant trade/no-trade → route to Bankr / Uniswap / paper mode → append Supabase logs and update execution state
 - **Separate cadence:** fitness + evolution (**tiered select**, **capital allocation**, breed, mutate, cull) should run on a **slower daily schedule** (same orchestrator with a daily branch or a separate internal path such as `GET /api/cron/evolution`)
 - **Auth:** require `Authorization: Bearer <CRON_SECRET>` (or Vercel’s `CRON_SECRET` env); reject unauthenticated calls so the endpoint is not public
 - **Safety:** short request timeout awareness — keep heavy work chunked or async-friendly where possible; use a DB/advisory lock so overlapping invocations cannot double-trade if a run exceeds the cron interval
@@ -373,6 +438,7 @@ This maps directly to Synthesis / Bankr judging emphasis: **real execution, real
 
 ### Trading + economics
 - [ ] Bankr Agent API (Avantis); Uniswap swaps; Locus + spending controls
+- [ ] **`market-data.ts`:** DexScreener-only fetches for Base; **allowlist** (min liquidity / volume / quote token); normalize **m5/h1/h6/h24** price change, volume, liquidity, tx counts into strategy inputs — **no candle APIs**
 - [ ] Add `src/lib/config/trader-strategies.ts` and `src/lib/config/risk.ts` as the typed source of truth for venue routing, cooldowns, timeframes, and leverage support
 - [ ] Add `src/lib/trading/router.ts` and `src/lib/trading/orchestrator.ts` so each cycle can persist one of: `trade_executed`, `no_trade_signal`, `blocked_by_risk`, `blocked_by_limits`
 - [ ] **Trader metadata:** define seed `TraderProfile` records (theme, description ≤500 chars, `imagePrompt`); generate images via OpenAI; upload to Supabase Storage; set `websiteUrl` to **`https://mutant.fund`** on every Bankr deploy unless a per-mutant site URL exists
@@ -385,7 +451,7 @@ This maps directly to Synthesis / Bankr judging emphasis: **real execution, real
 
 ### Vercel Cron (orchestrator)
 - [ ] Add `vercel.json` with `crons` mapping to `GET /api/cron/orchestrator` and default schedule `*/15 * * * *`
-- [ ] Implement `src/app/api/cron/orchestrator/route.ts`: verify cron secret, run the **trading** orchestration (market data → decisions → execute or no-trade → logs / state)
+- [ ] Implement `src/app/api/cron/orchestrator/route.ts`: verify cron secret, run the **trading** orchestration (DexScreener snapshots → decisions → execute or no-trade → logs / state)
 - [ ] Add a separate slower daily evolution path (`GET /api/cron/evolution` or internal scheduler branch) for fitness, selection, capital allocation updates, breeding, mutation, and cull decisions
 - [ ] Add overlap guard (e.g. lock row or “run in progress” flag) if a cycle can exceed the cron period
 - [ ] Deploy to Vercel; confirm cron appears under project → Cron Jobs and fires successfully (check logs / observability)
@@ -452,7 +518,7 @@ mutant-fund/
 │   │   │   ├── uniswap.ts    # Uniswap swap execution
 │   │   │   ├── locus.ts      # Locus payment integration
 │   │   │   ├── token.ts      # Bankr token deploy + fee redirect per mutant
-│   │   │   └── market-data.ts # Price feeds, OI, funding rates
+│   │   │   └── market-data.ts # DexScreener: Base pairs, allowlist filters, snapshot signal fields (no candles)
 │   │   ├── analysis/
 │   │   │   └── multi-model.ts # Bankr LLM Gateway multi-model analysis
 │   │   ├── identity/
@@ -618,6 +684,7 @@ Together this demonstrates **real execution**, **real onchain outcomes**, and **
 ---
 
 ## Sources
+- [DexScreener](https://dexscreener.com) — Base pair discovery + snapshot metrics (MVP market-data policy)
 - [OpenAI API — Text generation](https://platform.openai.com/docs/guides/text-generation)
 - [OpenAI API — Image generation](https://platform.openai.com/docs/guides/image-generation)
 - [Bankr Token Deploy API](https://docs.bankr.bot/token-launching/deploy-api)
