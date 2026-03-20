@@ -33,7 +33,7 @@ Agent/Human → skill.md / API → Escrow Contract (Base) → Mints ERC-8004 Mut
                   ↓               ↓               ↓
                        Base Mainnet (onchain)
                                   ↓
-            Vercel Cron: measure fitness → select → breed → mutate → cull
+            Vercel Cron: measure fitness → tiered select → allocate capital → breed → mutate → cull / revive (optional)
                                   ↓
                     Next.js Dashboard (Vercel)
                     + Per-mutant sites via Locus (stretch)
@@ -46,9 +46,10 @@ Agent/Human → skill.md / API → Escrow Contract (Base) → Mints ERC-8004 Mut
 - Describes fund mechanics, API endpoints, and how to invest
 - REST API (Next.js API routes):
   - `POST /api/invest` — agent sends USDC, gets a mutant (calls escrow contract)
-  - `GET /api/mutants` — list all mutants with genomes, fitness, PnL, **trader token address + pool id (if available)**
+  - `GET /api/mutants` — list all mutants with genomes, fitness, PnL, **`capital_allocation`**, **`lifecycle_status`**, **`correlation_score`** / **`novelty_score`** when computed, **trader token address + pool id (if available)**
   - `GET /api/mutants/:id` — specific mutant details + trade history + **onchain token + fee routing metadata**
-  - `GET /api/evolution` — current generation, recent mutations, survival rates
+  - `GET /api/evolution` — current generation, recent mutations, **tier counts** (elite / survivor / offspring / exploration), **capital allocation shifts**, **revival events** per cycle
+  - `POST /api/revive` — pay revival fee → spawn **probationary clone** of a culled mutant (see Evolutionary Engine); validate cooldowns; fee routes to treasury / exploration pool (stub escrow acceptable for hackathon)
   - `GET /api/status` — fund health, total AUM, active mutants
 - Other hackathon agents can discover and invest via skill.md
 
@@ -63,24 +64,53 @@ Agent/Human → skill.md / API → Escrow Contract (Base) → Mints ERC-8004 Mut
 - **Tooling:** Scaffold and deploy with **[LazerForge](https://github.com/LazerTechnologies/LazerForge)** — a Foundry template with sensible `foundry.toml` profiles, formatter/CI patterns, remappings (OpenZeppelin, Solady, Uniswap suites), and env-driven RPC / explorer keys so Base testnet → mainnet deploys stay reproducible. Quick start: install [Foundry](https://book.getfoundry.sh/getting-started/installation), then `forge init --template lazertechnologies/lazerforge contracts` (use `--branch minimal` for a slimmer tree). Ship `MutantFund.sol` under `contracts/src/` and run deploys via `forge script` (see LazerForge’s deployment docs in-repo).
 
 **P0 — Evolutionary Engine (TypeScript)**
-- Population of 5-10 mutants (trading strategies)
-- Each mutant has a "genome" — strategy parameters:
-  - Entry signal type (momentum, mean-reversion, funding-arb)
-  - Leverage (1-10x)
-  - Stop-loss % (3-15%)
-  - Take-profit % (5-30%)
-  - Asset preference (ETH, BTC, SOL, etc.)
-  - Timeframe (scalp: 1h, swing: 4h-1d)
-  - Position size (% of allocated capital)
-- Fitness function: Sharpe ratio weighted, penalizes drawdown
-- Selection: top 50% survive
-- Crossover: combine params from two winners
-- Mutation: ±10% random param adjustments on offspring
-- Cull: bottom performers lose capital allocation
+
+Each mutant has a **genome** — strategy parameters:
+- Entry signal type (momentum, mean-reversion, funding-arb)
+- Leverage (1-10x)
+- Stop-loss % (3-15%)
+- Take-profit % (5-30%)
+- Asset preference (ETH, BTC, SOL, etc.)
+- Timeframe (scalp: 1h, swing: 4h-1d)
+- Position size (% of **allocated capital** — see `capital_allocation` in schema)
+
+**Fitness (multi-term, regime-aware)**  
+Fitness is a weighted composite (tune weights in `fitness.ts`; expose constants for judges):
+- **Risk-adjusted return** — e.g. Sharpe-like metric on rolling PnL / return series
+- **Max drawdown penalty** — harsh penalty beyond fund guardrails
+- **Turnover / fee penalty** — discourages churn that burns edge on small accounts
+- **Inactivity penalty** — when the strategy should have signaled (per genome + market data) but did not trade, subject to min trade interval and max daily trades
+- **Correlation penalty** — vs cohort or fund aggregate exposure so the population does not collapse into one crowded trade
+- **Novelty / diversity** (optional) — small bonus for genomes underrepresented in the active pool (`novelty_score`)
+- **Treasury sustainability bonus** (optional, Bankr loop) — rewards per-trader token fee flow relative to LLM Gateway spend when logs support attribution
+
+**Regime-aware scoring:** blend multiple lookbacks (e.g. short + medium windows) with capped weight on the noisiest window so one lucky hour does not dominate a single generation.
+
+**Selection (tiered population policy)**  
+Avoid a single cutoff like “top 50% survive” or “top 90% survive” — weak pressure hides adaptation; extreme pressure kills diversity. Each cycle, **target** roughly:
+- **10–20% elites** — genomes **unchanged**; retain or **boost** `capital_allocation`
+- **40–50% survivors** — retained; **steady or slightly reduced** allocation; eligible to breed
+- **20–30% offspring** — **crossover** from parent pairs chosen for **high fitness and low correlation** to each other; then **mutation**
+- **5–15% exploration** — **new random** genomes (“immigrants”) to escape local optima
+
+Exact percentages can be **population-size aware** (e.g. minimum 1 explorer in tiny demos).
+
+**Crossover:** combine parameters from two parents (uniform or per-gene blend), then clamp to risk guardrails.
+
+**Mutation:** ±10% random adjustments on offspring parameters (clamp to allowed ranges).
+
+**Capital allocation and cull**  
+Prefer **reallocation before deletion**: weak mutants **lose trading budget first** (`capital_allocation` → lower or 0) while rows stay for audit. **Cull** the worst tier when fitness stays poor across windows or after repeated strips — set `lifecycle_status` to `culled`; keep history, trades, and ERC-8004 id for receipts.
+
+**Revival (fee → probationary clone; not pay-to-win)**  
+- A **revival fee** pays for a **new** mutant that is a **probationary clone** of a **culled** lineage (copy genome snapshot **± optional small jitter**), **not** a full restore of rank, guaranteed capital, or past PnL.
+- **Rules:** clone starts at **capped low** `capital_allocation`; **no breeding rights** for **1–2** generations; `revival_count` / lineage metadata records `revived_from_mutant_id`; **at most one revival per source mutant per configurable window** (e.g. N generations).
+- **Fee routing:** revival proceeds go to **treasury / exploration pool** — **do not** credit the fee directly as extra trading capital for that clone (prevents whales buying leaderboard slots).
+- **Edge cases:** if population is near minimum, cap revivals per cycle; reject revival if source is not `culled` or cooldown violated; optional minimum fee in USDC set by config.
 
 **P0 — Vercel Cron + orchestrator route**
 - `vercel.json` defines a [`crons`](https://vercel.com/docs/cron-jobs) entry pointing at a single secured API route (e.g. `GET /api/cron/orchestrator`)
-- Route handler runs one full cycle: fetch market data → each mutant trade/no-trade → execute via Bankr/Uniswap → compute fitness → evolution (select, breed, mutate, cull) → update ERC-8004 metadata onchain → append Supabase logs
+- Route handler runs one full cycle: fetch market data → each mutant trade/no-trade → execute via Bankr/Uniswap → compute fitness → evolution (**tiered select**, **capital allocation**, breed, mutate, cull) → update ERC-8004 metadata onchain → append Supabase logs
 - **Auth:** require `Authorization: Bearer <CRON_SECRET>` (or Vercel’s `CRON_SECRET` env); reject unauthenticated calls so the endpoint is not public
 - **Safety:** short request timeout awareness — keep heavy work chunked or async-friendly where possible; optional DB/advisory lock so overlapping invocations cannot double-trade if a run exceeds the cron interval
 - **Ops:** document `CRON_SECRET` in env setup; confirm schedule in Vercel project settings after deploy
@@ -165,13 +195,15 @@ This maps directly to Synthesis / Bankr judging emphasis: **real execution, real
 
 ### Agent interface + onchain
 - [ ] Write `public/skill.md` — fund mechanics + API for agents
-- [ ] Build API routes: `POST /api/invest`, `GET /api/mutants`, `GET /api/mutants/[id]`, `GET /api/evolution`, `GET /api/status`
+- [ ] Build API routes: `POST /api/invest`, `GET /api/mutants`, `GET /api/mutants/[id]`, `GET /api/evolution`, `POST /api/revive`, `GET /api/status`
 - [ ] Write Solidity escrow (`MutantFund.sol`); deploy Base (testnet first, then mainnet as required) using Foundry + [LazerForge](https://github.com/LazerTechnologies/LazerForge) (`forge init --template lazertechnologies/lazerforge contracts`, then `forge build` / `forge script` per LazerForge deployment guide)
 
 ### Evolutionary engine
-- [ ] Define strategy genome type; random population init
-- [ ] Fitness (Sharpe-like, drawdown penalty); selection, crossover, mutation
-- [ ] Persist mutants and evolution history in Supabase
+- [ ] Define strategy genome type; random population init + **exploration** immigrants each cycle
+- [ ] Fitness: multi-term composite (Sharpe-like, drawdown, turnover/fees, inactivity, correlation; optional novelty + treasury bonus); **regime-aware** multi-window blend
+- [ ] **Tiered selection** (elites / survivors / offspring / exploration); **capital allocation** before hard cull; parent choice favors **low correlation**
+- [ ] Crossover + mutation (±10%, clamped); revival path: **probationary clone** + cooldowns + fee to treasury
+- [ ] Persist mutants and evolution history in Supabase (including `evolution_logs` tier + allocation fields)
 
 ### Trading + economics
 - [ ] Bankr Agent API (Avantis); Uniswap swaps; Locus + spending controls
@@ -224,7 +256,9 @@ mutant-fund/
 │   │       │   └── [id]/
 │   │       │       └── route.ts  # GET — mutant detail + trades
 │   │       ├── evolution/
-│   │       │   └── route.ts  # GET — evolution state + history
+│   │       │   └── route.ts  # GET — evolution state + history + tier counts + allocation shifts
+│   │       ├── revive/
+│   │       │   └── route.ts  # POST — revival fee → probationary clone (treasury routing)
 │   │       ├── cron/
 │   │       │   └── orchestrator/
 │   │       │       └── route.ts  # GET — Vercel Cron: full trading + evolution cycle (secret-gated)
@@ -233,10 +267,12 @@ mutant-fund/
 │   ├── lib/
 │   │   ├── evolution/
 │   │   │   ├── genome.ts     # Strategy genome type + random init
-│   │   │   ├── fitness.ts    # Fitness function
-│   │   │   ├── selection.ts  # Tournament selection
-│   │   │   ├── crossover.ts  # Parameter crossover
-│   │   │   └── mutation.ts   # Random mutation
+│   │   │   ├── fitness.ts    # Multi-term + regime-aware fitness
+│   │   │   ├── selection.ts  # Tiered selection, elites/survivors/offspring/exploration
+│   │   │   ├── crossover.ts  # Parameter crossover (low-correlation parent pairs)
+│   │   │   ├── mutation.ts   # Random mutation (clamped)
+│   │   │   ├── allocation.ts # Capital allocation + cull thresholds
+│   │   │   └── revival.ts    # Probationary clone + cooldown validation
 │   │   ├── trading/
 │   │   │   ├── bankr.ts      # Bankr API integration (Avantis trades)
 │   │   │   ├── uniswap.ts    # Uniswap swap execution
@@ -286,7 +322,12 @@ create table mutants (
   pnl float default 0,
   generation integer default 0,
   parent_ids uuid[],                -- Lineage tracking
-  status text default 'active',     -- active, culled, breeding
+  revived_from_mutant_id uuid references mutants(id), -- set for probationary revival clones only
+  lifecycle_status text default 'active', -- active, culled, probation_revival, breeding, exploration_seed
+  capital_allocation numeric default 1.0 check (capital_allocation >= 0), -- fraction of baseline trading budget (0 = benched)
+  revival_count integer default 0 not null,
+  novelty_score float default 0,          -- optional diversity signal
+  correlation_score float default 0,      -- optional crowding vs cohort (rolling)
   created_at timestamptz default now()
 );
 
@@ -309,12 +350,18 @@ create table trades (
 -- Evolution logs
 create table evolution_logs (
   id uuid primary key default gen_random_uuid(),
-  generation integer,
-  survivors uuid[],
+  generation integer not null,
+  elite_ids uuid[],
+  survivor_ids uuid[],
+  offspring_ids uuid[],
+  explorer_ids uuid[],              -- random "immigrant" genomes this cycle
   culled uuid[],
-  offspring uuid[],
-  mutations jsonb,                  -- What params changed
+  revived_ids uuid[],               -- probationary clones created via POST /api/revive this cycle (if any)
+  tier_counts jsonb,                -- e.g. {"elite":2,"survivor":6,"offspring":3,"exploration":1}
+  allocation_summary jsonb,         -- capital reallocations / notable per-id deltas for dashboards
+  mutations jsonb,                  -- what params changed (offspring)
   avg_fitness float,
+  avg_correlation float,            -- optional cohort metric snapshot post-selection
   created_at timestamptz default now()
 );
 ```
@@ -368,7 +415,7 @@ Together this demonstrates **real execution**, **real onchain outcomes**, and **
 
 > "Mutant Fund — your money, evolved.
 >
-> Deposit USDC → mint a Mutant — an ERC-8004 agent with unique trading traits. Your mutant joins a population of competing strategies on Base. Every cycle, the fittest mutants survive and breed. The weak ones die. Offspring inherit mutated traits from their parents.
+> Deposit USDC → mint a Mutant — an ERC-8004 agent with unique trading traits. Your mutant joins a population of competing strategies on Base. Every cycle, **tiered selection** reshapes the roster: elites hold ground, survivors keep trading with real **capital allocation**, offspring inherit **mutated** traits from **low-correlation** parents, and fresh explorers keep the gene pool honest. The weak lose budget first, then get culled. Optional **revival** is a **probationary clone** — not a pay-to-win reset.
 >
 > No single strategy to blow up. No black box. Every trade and mutation logged onchain. Human guardrails enforced by smart contract.
 >
