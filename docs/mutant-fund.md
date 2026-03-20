@@ -10,6 +10,8 @@ Team "Glitch" is building for The Synthesis hackathon (deadline March 22, 2026).
 
 **Terminology:** In this doc, **trader** and **mutant** refer to the same unit: one population member with its own genome, execution wallet, trade history, ERC-8004 identity, and **one Bankr-launched token** on Base. The NFT is the **economic title** to that mutant’s escrowed bankroll and settled gains (redemption rights follow the **current** holder, not the original depositor). Depositors can spawn new mutants over time; the rows below describe the **seed traders** we launch at demo time.
 
+**Chain scope (MVP):** All **live** token launches, liquidity pools, trade execution, escrow settlement, fee routing, and verification receipts for Mutant Fund are **Base-only**. No other chain is used for live mutant trading in the MVP; any non-Base logic must stay explicitly marked as simulation / paper mode until documented otherwise.
+
 **Doc vs code today:** This repository is still mostly scaffold; there is no implemented pipeline that creates trader images or syncs metadata to Bankr yet. The sections below define the **intended** source-of-truth model. Until code lands, names and symbols live in this doc’s seed matrix and in planned Supabase columns.
 
 ---
@@ -199,11 +201,74 @@ Prefer **reallocation before deletion**: weak mutants **lose trading budget firs
 - **Not pay-to-win:** revival does **not** restore prior **elite tier**, historical peak PnL, or old **high-water mark** for performance fees — recommend **resetting HWM** to the post-revival bankroll baseline.
 - **Edge cases:** if population is near minimum, cap revivals per cycle; reject revival if token is not `culled`/eligible or cooldown violated; optional minimum revival payment in USDC; NFT transfer means **only the current holder** can revive or redeem.
 
+### Execution model and cadence (default operating spec)
+
+This section is the default **source of truth** for "how do trades execute?" and "how often do we trade?" until code or env overrides are documented explicitly.
+
+**Execution model**
+- The trading system is **evaluation-driven**, not "force trade every tick." On each orchestrator cycle, every **active** mutant is reviewed and returns one of four outcomes: `trade_executed`, `no_trade_signal`, `blocked_by_risk`, or `blocked_by_limits`.
+- A mutant can only execute if it is **not** `culled`, **not** globally halted, **not** inside cooldown, and still has non-zero `capital_allocation`.
+- Position sizing uses that mutant’s **own bankroll** only: `effective trading notional = bankroll × capital_allocation`.
+- `capital_allocation = 0` means the mutant is effectively **benched** for trading, even if it remains in the population for audit/history.
+- The **trading loop** and **evolution loop** are intentionally **separate**. We do **not** breed / mutate on every trade evaluation tick.
+- All **live** execution in the MVP routes to Base-native venues and contracts only; anything outside Base must remain explicitly labeled as paper mode / simulation.
+
+**Cadence**
+- **Trading orchestrator cron:** default `*/15 * * * *` (**every 15 minutes**).
+- **Strategy evaluation cadence:** every active mutant is evaluated on **every** trading tick.
+- **Trade cadence:** signal-driven; a trade only fires when the strategy signal is valid and all guardrails pass.
+- **Minimum time between trades:** `15 minutes` per mutant.
+- **Maximum daily trades:** `20` per mutant / strategy.
+- **Evolution cadence:** default **once every 24 hours** (or another slower schedule with equivalent intent), after enough trade + no-trade observations have accumulated.
+- **Why this split:** a 15-minute trading loop matches the hard cooldown rule, while a slower evolution loop avoids overfitting to a single noisy hour and keeps cron work predictable.
+
+**Lifecycle states used by the trading loop**
+- `active` — eligible for normal evaluation and execution
+- `benched` — retained for audit/history but skipped because `capital_allocation = 0`
+- `culled` — not eligible to trade until revived
+- `probation_revival` — revived mutant with capped sizing and temporary breeding restrictions
+
+**Deterministic venue router (default)**
+
+Each strategy family should have one explicit venue policy so routing logic is deterministic and auditable:
+
+| Strategy family | Seed trader(s) | Default venue | Allowed assets | Leverage | Default timeframe | Notes |
+|---|---|---|---|---|---|---|
+| Momentum / trend | Sprint | **Bankr Agent API / Avantis** | ETH, BTC, SOL majors first | Yes, capped at 10x | 1h to 4h | Good fit for directional perp exposure |
+| Mean-reversion | Reverb | **Uniswap Trading API** | ETH, BTC wrappers, liquid majors | No leverage by default | 15m to 4h | Spot-biased to reduce churn and liquidation risk |
+| Funding / basis arb | Carry | **Bankr Agent API / Avantis** | Assets with stable funding + OI data | Yes, capped at 10x | 1h to 1d | Requires funding / basis inputs in market data |
+| Narrative / discretionary | Omen | **Paper decision mode** first; optionally one approved live venue later | Liquid majors only until rules harden | No leverage by default | 4h to 1d | Record decisions and reasoning even when not live-trading |
+
+**Typed config surface (planned code source of truth)**
+- Mirror the router above in `src/lib/config/trader-strategies.ts` with per-strategy fields such as `signalType`, `allowedVenue`, `allowedAssets`, `minTradeIntervalMinutes`, `maxTradesPerDay`, `defaultTimeframe`, and `supportsLeverage`.
+- Keep hard limits like max leverage, drawdown halt, and position caps centralized in `src/lib/config/risk.ts`.
+- API routes and cron handlers should read from these config modules rather than duplicating business rules in multiple files.
+
+**Per-cycle decision order**
+1. Verify cron auth / lock so overlapping runs cannot double-evaluate the same mutant.
+2. Load all non-culled mutants plus global risk state.
+3. Skip mutants that are benched, halted, or inside cooldown.
+4. Fetch market data needed for that mutant’s strategy family.
+5. Generate a `trade` or `no-trade` decision for that mutant.
+6. Apply risk and execution limit checks.
+7. Route to the correct venue adapter (`Bankr/Avantis`, `Uniswap`, or paper mode).
+8. Persist one structured outcome: `trade_executed`, `no_trade_signal`, `blocked_by_risk`, or `blocked_by_limits`.
+9. Run fitness / selection / mutation on the slower **daily** evolution cadence, not on every trading tick.
+
+**Open edge cases and default handling**
+- **No signal:** log `no_trade_signal`; do not treat every idle tick as a failure unless the inactivity model says the strategy should have acted.
+- **Cooldown conflict:** log `blocked_by_limits` if a second signal appears before `15 minutes`.
+- **Daily trade cap reached:** log `blocked_by_limits`; reset the counter on the next UTC day boundary (or document an alternative reset convention if changed).
+- **Global drawdown breach:** halt all live execution and continue logging evaluations until manually or policy-unhalted.
+- **Omen / discretionary mode:** until live execution rules are explicit, keep it in paper-decision mode or restrict it to one approved venue / asset subset.
+- **Pending redemption:** optionally freeze new trades for that `tokenId` until open positions settle and `withdrawable_balance` is clear.
+
 **P0 — Vercel Cron + orchestrator route**
-- `vercel.json` defines a [`crons`](https://vercel.com/docs/cron-jobs) entry pointing at a single secured API route (e.g. `GET /api/cron/orchestrator`)
-- Route handler runs one full cycle: fetch market data → each mutant trade/no-trade → execute via Bankr/Uniswap → compute fitness → evolution (**tiered select**, **capital allocation**, breed, mutate, cull) → update ERC-8004 metadata onchain → append Supabase logs
+- `vercel.json` defines a [`crons`](https://vercel.com/docs/cron-jobs) entry pointing at a single secured API route (e.g. `GET /api/cron/orchestrator`) with default schedule `*/15 * * * *`
+- Route handler runs one **trading** cycle: fetch market data → each mutant trade/no-trade → route to Bankr / Uniswap / paper mode → append Supabase logs and update execution state
+- **Separate cadence:** fitness + evolution (**tiered select**, **capital allocation**, breed, mutate, cull) should run on a **slower daily schedule** (same orchestrator with a daily branch or a separate internal path such as `GET /api/cron/evolution`)
 - **Auth:** require `Authorization: Bearer <CRON_SECRET>` (or Vercel’s `CRON_SECRET` env); reject unauthenticated calls so the endpoint is not public
-- **Safety:** short request timeout awareness — keep heavy work chunked or async-friendly where possible; optional DB/advisory lock so overlapping invocations cannot double-trade if a run exceeds the cron interval
+- **Safety:** short request timeout awareness — keep heavy work chunked or async-friendly where possible; use a DB/advisory lock so overlapping invocations cannot double-trade if a run exceeds the cron interval
 - **Ops:** document `CRON_SECRET` in env setup; confirm schedule in Vercel project settings after deploy
 
 **P0 — Trading Execution Layer**
@@ -211,6 +276,11 @@ Prefer **reallocation before deletion**: weak mutants **lose trading budget firs
 - **Uniswap Trading API** — spot swaps on Base
 - **Locus** — autonomous USDC payments with spending controls
 - **Bankr LLM Gateway** (llm.bankr.bot) — multi-model analysis (Claude for reasoning, GPT for data parsing, Gemini for speed)
+- Planned modules:
+  - `src/lib/trading/router.ts` — deterministic venue routing based on strategy family + lifecycle state
+  - `src/lib/trading/orchestrator.ts` — one-trader-at-a-time evaluation and structured result logging
+  - `src/lib/config/trader-strategies.ts` — typed strategy / venue metadata
+  - `src/lib/config/risk.ts` — hard guardrails reused by cron + API surfaces
 
 **P0 — Per-Trader Token Launch (Self-Sustaining Economics)**
 
@@ -261,6 +331,8 @@ This maps directly to Synthesis / Bankr judging emphasis: **real execution, real
 - Max total portfolio drawdown: 20% → auto-halt all trading
 - Min time between trades: 15 minutes
 - Max daily trades: 20 per strategy
+- Default orchestrator cadence: every 15 minutes, which matches the minimum inter-trade guardrail
+- Default evolution cadence: once every 24 hours, separate from trading ticks
 
 ---
 
@@ -297,9 +369,12 @@ This maps directly to Synthesis / Bankr judging emphasis: **real execution, real
 - [ ] **Tiered selection** (elites / survivors / offspring / exploration); **capital allocation** (per-mutant multiplier on **own** bankroll) before hard cull; parent choice favors **low correlation**
 - [ ] Crossover + mutation (±10%, clamped); revival path: **same-NFT reactivation** + new genome + cooldowns + revival fee split (protocol vs bankroll seed)
 - [ ] Persist mutants and evolution history in Supabase (including `evolution_logs` tier + allocation fields)
+- [ ] Keep evolution on a **slower daily cadence** than trading evaluation; do not mutate / breed on every 15-minute orchestrator tick
 
 ### Trading + economics
 - [ ] Bankr Agent API (Avantis); Uniswap swaps; Locus + spending controls
+- [ ] Add `src/lib/config/trader-strategies.ts` and `src/lib/config/risk.ts` as the typed source of truth for venue routing, cooldowns, timeframes, and leverage support
+- [ ] Add `src/lib/trading/router.ts` and `src/lib/trading/orchestrator.ts` so each cycle can persist one of: `trade_executed`, `no_trade_signal`, `blocked_by_risk`, `blocked_by_limits`
 - [ ] **Trader metadata:** define seed `TraderProfile` records (theme, description ≤500 chars, `imagePrompt`); generate images via OpenAI; upload to Supabase Storage; set `websiteUrl` to **`https://mutant.fund`** on every Bankr deploy unless a per-mutant site URL exists
 - [ ] **Per-trader token roster:** lock seed names/symbols (Sprint, Reverb, Carry, Omen) or update matrix + env/config
 - [ ] **Launch one Bankr token per seed trader** on Base (`bankr launch … --yes` or `POST /token-launches/deploy`); pass `description`, `image` (Supabase public URL), `websiteUrl`; store **contract + pool + launch tx** + mirrored profile fields in Supabase
@@ -309,8 +384,9 @@ This maps directly to Synthesis / Bankr judging emphasis: **real execution, real
 - [ ] Execute real trades on Base; fund mutant wallets (~$50–100 total)
 
 ### Vercel Cron (orchestrator)
-- [ ] Add `vercel.json` with `crons` mapping to `GET /api/cron/orchestrator` (path matches your App Router file)
-- [ ] Implement `src/app/api/cron/orchestrator/route.ts`: verify cron secret, run orchestration (same seven steps as architecture: market data → decisions → execute → fitness → evolution → ERC-8004 updates → Supabase + onchain logs)
+- [ ] Add `vercel.json` with `crons` mapping to `GET /api/cron/orchestrator` and default schedule `*/15 * * * *`
+- [ ] Implement `src/app/api/cron/orchestrator/route.ts`: verify cron secret, run the **trading** orchestration (market data → decisions → execute or no-trade → logs / state)
+- [ ] Add a separate slower daily evolution path (`GET /api/cron/evolution` or internal scheduler branch) for fitness, selection, capital allocation updates, breeding, mutation, and cull decisions
 - [ ] Add overlap guard (e.g. lock row or “run in progress” flag) if a cycle can exceed the cron period
 - [ ] Deploy to Vercel; confirm cron appears under project → Cron Jobs and fires successfully (check logs / observability)
 
@@ -357,7 +433,7 @@ mutant-fund/
 │   │       │   └── route.ts  # POST — revival payment → same NFT, new genome; fee split + bankroll seed
 │   │       ├── cron/
 │   │       │   └── orchestrator/
-│   │       │       └── route.ts  # GET — Vercel Cron: full trading + evolution cycle (secret-gated)
+│   │       │       └── route.ts  # GET — Vercel Cron: 15-minute trading cycle (secret-gated)
 │   │       └── status/
 │   │           └── route.ts  # GET — fund health + aggregate TVL (sum of per-mutant escrow)
 │   ├── lib/
@@ -370,6 +446,8 @@ mutant-fund/
 │   │   │   ├── allocation.ts # Capital allocation + cull thresholds
 │   │   │   └── revival.ts    # Same-NFT revival eligibility + cooldown validation
 │   │   ├── trading/
+│   │   │   ├── orchestrator.ts # Per-trader evaluation loop + structured outcomes
+│   │   │   ├── router.ts     # Deterministic venue router by strategy family
 │   │   │   ├── bankr.ts      # Bankr API integration (Avantis trades)
 │   │   │   ├── uniswap.ts    # Uniswap swap execution
 │   │   │   ├── locus.ts      # Locus payment integration
@@ -382,6 +460,7 @@ mutant-fund/
 │   │   ├── db/
 │   │   │   └── supabase.ts   # Supabase client + queries
 │   │   └── config/
+│   │       ├── trader-strategies.ts # Typed strategy routing + cadence metadata
 │   │       ├── risk.ts       # Hardcoded risk guardrails
 │   │       ├── env.ts        # Environment + API keys
 │   │       └── trader-profiles.ts  # Seed TraderProfile constants + theme keys (source for Bankr + UI)
@@ -426,12 +505,17 @@ create table mutants (
   pnl float default 0,               -- Display / rolling realized PnL (mirror onchain + trades; fee engine may use high_water_mark separately)
   generation integer default 0,
   parent_ids uuid[],                -- Lineage tracking (breeding); revival keeps same row / token_id
-  lifecycle_status text default 'active', -- active, culled, probation_revival, breeding, exploration_seed
+  lifecycle_status text default 'active', -- active, benched, culled, probation_revival, breeding, exploration_seed
   capital_allocation numeric default 1.0 check (capital_allocation >= 0), -- multiplier on this mutant's own bankroll for position sizing (0 = benched)
   principal_deposited numeric default 0,   -- net USDC deposited into this mutant's escrow (mirror contract)
   reserved_margin numeric default 0,       -- USDC / notional locked in open positions (off-chain or synced)
   withdrawable_balance numeric default 0,  -- idle USDC available to redeem after fees (mirror or derived)
   high_water_mark numeric default 0,       -- post-fee equity high-water mark for 20% performance fee on new realized profit
+  last_trade_at timestamptz,               -- last live trade execution timestamp (for cooldown checks)
+  last_evaluated_at timestamptz,           -- last orchestrator evaluation, even when no trade fired
+  trades_today integer default 0 not null, -- per-mutant rolling daily execution count
+  last_signal_status text,                 -- trade_executed, no_trade_signal, blocked_by_risk, blocked_by_limits
+  halt_reason text,                        -- null unless globally or locally halted
   last_revival_at timestamptz,             -- last same-NFT revival timestamp
   revival_count integer default 0 not null,
   novelty_score float default 0,          -- optional diversity signal
