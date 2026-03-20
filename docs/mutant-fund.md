@@ -60,6 +60,7 @@ Agent/Human → skill.md / API → Escrow Contract (Base) → Mints ERC-8004 Mut
 - `getAgentInfo(uint256 tokenId)` → returns genome + fitness
 - `updateGenome(uint256 tokenId, bytes genome)` → orchestrator updates after evolution
 - Withdrawal/profit-sharing: stubbed as "coming soon"
+- **Tooling:** Scaffold and deploy with **[LazerForge](https://github.com/LazerTechnologies/LazerForge)** — a Foundry template with sensible `foundry.toml` profiles, formatter/CI patterns, remappings (OpenZeppelin, Solady, Uniswap suites), and env-driven RPC / explorer keys so Base testnet → mainnet deploys stay reproducible. Quick start: install [Foundry](https://book.getfoundry.sh/getting-started/installation), then `forge init --template lazertechnologies/lazerforge contracts` (use `--branch minimal` for a slimmer tree). Ship `MutantFund.sol` under `contracts/src/` and run deploys via `forge script` (see LazerForge’s deployment docs in-repo).
 
 **P0 — Evolutionary Engine (TypeScript)**
 - Population of 5-10 mutants (trading strategies)
@@ -165,7 +166,7 @@ This maps directly to Synthesis / Bankr judging emphasis: **real execution, real
 ### Agent interface + onchain
 - [ ] Write `public/skill.md` — fund mechanics + API for agents
 - [ ] Build API routes: `POST /api/invest`, `GET /api/mutants`, `GET /api/mutants/[id]`, `GET /api/evolution`, `GET /api/status`
-- [ ] Write Solidity escrow (`MutantFund.sol`); deploy Base (testnet first, then mainnet as required)
+- [ ] Write Solidity escrow (`MutantFund.sol`); deploy Base (testnet first, then mainnet as required) using Foundry + [LazerForge](https://github.com/LazerTechnologies/LazerForge) (`forge init --template lazertechnologies/lazerforge contracts`, then `forge build` / `forge script` per LazerForge deployment guide)
 
 ### Evolutionary engine
 - [ ] Define strategy genome type; random population init
@@ -202,9 +203,11 @@ mutant-fund/
 ├── vercel.json               # Cron schedule → /api/cron/orchestrator
 ├── public/
 │   └── skill.md              # Agent-readable fund description + API docs
-├── contracts/
-│   ├── MutantFund.sol        # Escrow + ERC-8004 minting + mutant metadata
-│   └── deploy.ts             # Deployment script (Hardhat or Foundry)
+├── contracts/                # Foundry project (e.g. from LazerForge template)
+│   ├── foundry.toml          # Profiles, optimizer, Base RPC via env (see LazerForge)
+│   ├── src/
+│   │   └── MutantFund.sol    # Escrow + ERC-8004 minting + mutant metadata
+│   └── script/               # `forge script` deploy / verify flows
 ├── src/
 │   ├── app/
 │   │   ├── page.tsx          # Landing page: "Your money, evolved"
