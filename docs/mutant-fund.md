@@ -2,13 +2,13 @@
 
 ## Context
 
-Team "Glitch" is building for The Synthesis hackathon (deadline March 22, 2026). The problem: single-strategy trading bots fail in changing markets. Inspired by Jim Simons / Renaissance Technologies, we're building a **decentralized autonomous hedge fund** where a population of AI trading agents evolve their strategies through natural selection — anyone (human or agent) can deposit USDC to spawn their own mutant.
+Team "Glitch" is building for The Synthesis hackathon (deadline March 22, 2026). The problem: single-strategy trading bots fail in changing markets. Inspired by Jim Simons / Renaissance Technologies, we're building a **decentralized autonomous hedge fund** where a population of AI trading agents evolve their strategies through natural selection — anyone (human or agent) can deposit USDC to spawn their own mutant. Each mutant is backed by its **own on-escrow bankroll** (not a pooled LP share); the **current ERC-8004 NFT holder** can redeem idle balance + settled PnL subject to the rules below.
 
 **CROPS Design Framing:** David holds USDC in a bear market. He wants yield but can't watch markets 24/7, doesn't trust single-strategy bots, and wants transparency. The evolutionary approach solves this: many small competing strategies that naturally adapt, with hard risk guardrails and full onchain transparency.
 
 **Agent-first design:** Build for agents first (skill.md + API), human UI second. Other hackathon agents can discover and invest in Mutant Fund programmatically.
 
-**Terminology:** In this doc, **trader** and **mutant** refer to the same unit: one population member with its own genome, execution wallet, trade history, ERC-8004 identity, and **one Bankr-launched token** on Base. Depositors can spawn new mutants over time; the rows below describe the **seed traders** we launch at demo time.
+**Terminology:** In this doc, **trader** and **mutant** refer to the same unit: one population member with its own genome, execution wallet, trade history, ERC-8004 identity, and **one Bankr-launched token** on Base. The NFT is the **economic title** to that mutant’s escrowed bankroll and settled gains (redemption rights follow the **current** holder, not the original depositor). Depositors can spawn new mutants over time; the rows below describe the **seed traders** we launch at demo time.
 
 **Doc vs code today:** This repository is still mostly scaffold; there is no implemented pipeline that creates trader images or syncs metadata to Bankr yet. The sections below define the **intended** source-of-truth model. Until code lands, names and symbols live in this doc’s seed matrix and in planned Supabase columns.
 
@@ -35,7 +35,7 @@ Earlier versions of this doc implied “metadata + optional social proof URL” 
 | `websiteUrl` | Project site for token metadata — default **`https://mutant.fund`** for all seed traders unless a dedicated per-mutant URL exists later |
 | `tweetUrl` | Optional social proof link for Bankr metadata |
 
-**Separation of concerns:** `TraderProfile` is **brand/display** metadata. Keep it separate from **operational** fields: `genome`, `fitness`, `wallet_address`, `fee_treasury_address`, pool ids, tx hashes. The same `TraderProfile` payload (or a subset) is what you send to Bankr; trading state stays in other columns.
+**Separation of concerns:** `TraderProfile` is **brand/display** metadata. Keep it separate from **operational** fields: `genome`, `fitness`, `wallet_address`, `fee_treasury_address`, pool ids, tx hashes, **bankroll / redemption** fields (`principal_deposited`, `reserved_margin`, `withdrawable_balance`, `high_water_mark`, etc.). The same `TraderProfile` payload (or a subset) is what you send to Bankr; trading state stays in other columns.
 
 ### How metadata is created (end-to-end)
 
@@ -102,7 +102,7 @@ Agent/Human → skill.md / API → Escrow Contract (Base) → Mints ERC-8004 Mut
                   ↓               ↓               ↓
                        Base Mainnet (onchain)
                                   ↓
-            Vercel Cron: measure fitness → tiered select → allocate capital → breed → mutate → cull / revive (optional)
+            Vercel Cron: measure fitness → tiered select → size trades (capital multiplier) → breed → mutate → cull / same-NFT revive (optional)
                                   ↓
                     Next.js Dashboard (Vercel)
                     + Per-mutant sites via Locus (stretch)
@@ -114,22 +114,43 @@ Agent/Human → skill.md / API → Escrow Contract (Base) → Mints ERC-8004 Mut
 - `skill.md` hosted at `mutantfund.vercel.app/skill.md`
 - Describes fund mechanics, API endpoints, and how to invest
 - REST API (Next.js API routes):
-  - `POST /api/invest` — agent sends USDC, gets a mutant (calls escrow contract)
-  - `GET /api/mutants` — list all mutants with genomes, fitness, PnL, **`capital_allocation`**, **`lifecycle_status`**, **`correlation_score`** / **`novelty_score`** when computed, **trader token address + pool id (if available)**, and **`TraderProfile`** mirror fields (`trader_description`, **`theme_key`**, **`image_url`**, **`website_url`**) when implemented
-  - `GET /api/mutants/:id` — specific mutant details + trade history + **onchain token + fee routing metadata**
-  - `GET /api/evolution` — current generation, recent mutations, **tier counts** (elite / survivor / offspring / exploration), **capital allocation shifts**, **revival events** per cycle
-  - `POST /api/revive` — pay revival fee → spawn **probationary clone** of a culled mutant (see Evolutionary Engine); validate cooldowns; fee routes to treasury / exploration pool (stub escrow acceptable for hackathon)
-  - `GET /api/status` — fund health, total AUM, active mutants
+  - `POST /api/invest` — agent sends USDC **either** to **mint a new mutant** (new NFT) **or** to **top up** an existing mutant’s escrow bankroll (must hold that NFT or be allowlisted per contract rules); calls escrow `deposit`
+  - `POST /api/redeem` (or `POST /api/withdraw`) — **current NFT holder** requests withdrawal of **idle USDC** after performance fee settlement; rejects or partial-fills if `reserved_margin` / open positions lock capital; returns quote + tx payload or executes via escrow `redeem`
+  - `GET /api/mutants` — list all mutants with genomes, fitness, PnL, **`capital_allocation`**, **`lifecycle_status`**, **`correlation_score`** / **`novelty_score`** when computed, **bankroll / redemption hints** (`principal_deposited`, `reserved_margin`, `withdrawable_balance`, `high_water_mark` when implemented), **trader token address + pool id (if available)**, and **`TraderProfile`** mirror fields (`trader_description`, **`theme_key`**, **`image_url`**, **`website_url`**) when implemented
+  - `GET /api/mutants/:id` — specific mutant details + trade history + **onchain token + fee routing metadata** + redemption accounting fields when implemented
+  - `GET /api/evolution` — current generation, recent mutations, **tier counts** (elite / survivor / offspring / exploration), **capital allocation shifts** (multipliers on each mutant’s bankroll), **revival events** per cycle
+  - `POST /api/revive` — pay **revival payment** for a **culled or depleted** mutant; **same ERC-8004 token id**: protocol takes a **revival protocol fee**, **net remainder seeds** the mutant’s **fresh bankroll**; genome replaced with a **new strategy** (probation rules, cooldowns — see Evolutionary Engine); stub escrow acceptable for hackathon
+  - `GET /api/status` — fund health, **aggregate TVL** (sum of per-mutant escrow bankrolls), active mutants
 - Other hackathon agents can discover and invest via skill.md
 
 **P0 — Escrow Contract (Solidity, Base)**
-- Accepts USDC deposits
-- Mints ERC-8004 identity NFT per mutant
-- Stores mutant metadata (strategy genome, lineage, fitness history)
-- `deposit(uint256 amount)` → mints mutant NFT
-- `getAgentInfo(uint256 tokenId)` → returns genome + fitness
-- `updateGenome(uint256 tokenId, bytes genome)` → orchestrator updates after evolution
-- Withdrawal/profit-sharing: stubbed as "coming soon"
+
+Per-mutant escrow (not a single pooled vault for all holders): each mutant’s USDC lives in accounting keyed by **token id**. The **current NFT holder** has redemption rights to **that** mutant’s bankroll and **settled** equity.
+
+- Accepts USDC; **mints** one ERC-8004 identity NFT per **new** mutant, or **credits** bankroll for an existing `tokenId` when the caller is authorized (typically the NFT holder).
+- Stores mutant metadata (strategy genome, lineage, fitness history).
+- `deposit(uint256 tokenId, uint256 amount)` — `tokenId == 0` (or dedicated `mint` path) **mints** a new NFT and seeds its bankroll; non-zero `tokenId` **tops up** that mutant’s bankroll.
+- `redeem(uint256 tokenId, uint256 amount, address to)` — **only** callable by **current owner** (or approved operator). Transfers up to **withdrawable** idle USDC after fees. Must **revert** or **cap** if `amount` exceeds post-fee withdrawable or if policy requires **no open positions** (integrate with `reserved_margin` off-chain or on-chain snapshot).
+- `getAgentInfo(uint256 tokenId)` → returns genome + fitness (+ optional bankroll view for integrators).
+- `updateGenome(uint256 tokenId, bytes genome)` → orchestrator updates after evolution / **after paid revival** (new strategy).
+- **Protocol performance fee (20%):** applied **only** to **realized** profit above a per-mutant **high-water mark** (HWM). On each realization event (or batch settlement), compute incremental profit above HWM, take **20%** for protocol treasury, then **raise HWM** to post-fee equity so the **same** gains are not charged twice. **No** ongoing management fee in MVP. Losses reduce bankroll; **no** guaranteed principal.
+- **Redemption / settlement:** withdraw only **idle** USDC not locked as margin; **unrealized** PnL is not spendable until positions close and PnL is realized (and performance fee applied). Optional: while a redemption is **pending**, pause new trades for that `tokenId` until settlement completes.
+- **Revival (same NFT):** `revive(uint256 tokenId, ...)` when mutant is **culled** or **bankroll depleted** per policy. Caller pays a **revival payment**; a **revival protocol fee** (configurable bps) goes to **protocol treasury**; the **net** credits that **same** `tokenId`’s bankroll as a **fresh seed**. Genome is reset to a **new** strategy; `capital_allocation` restarts **low** (probation); increment `revival_count`, enforce **cooldown** between revivals. **Not** a restore of past rank, peak PnL, or prior HWM unless explicitly reset in contract (recommended: **reset HWM** to new seed baseline for fairness).
+- **Separation from Bankr token economics:** per-trader **creator fee / LLM treasury** routes stay **isolated** for inference (see Per-Trader Token Launch). Protocol **20%** and **revival fees** are **separate** and come from investor / escrow flows above, not from siphoning creator fee shares intended for the LLM loop.
+
+```mermaid
+flowchart TD
+    deposit[DepositUSDC] --> mint[MintOrTopUpMutantNFT]
+    mint --> bankroll[MutantBankroll]
+    bankroll --> trade[TradeAndSettle]
+    trade --> realized[RealizedPnLAndIdleUSDC]
+    realized --> fee[PerformanceFee20PercentHWM]
+    fee --> redeem[RedeemByCurrentNFTHolder]
+    redeem --> death[MutantCulledOrDepleted]
+    death --> revive[PayRevivalFeeSameNFTNewGenome]
+    revive --> bankroll
+```
+
 - **Tooling:** Scaffold and deploy with **[LazerForge](https://github.com/LazerTechnologies/LazerForge)** — a Foundry template with sensible `foundry.toml` profiles, formatter/CI patterns, remappings (OpenZeppelin, Solady, Uniswap suites), and env-driven RPC / explorer keys so Base testnet → mainnet deploys stay reproducible. Quick start: install [Foundry](https://book.getfoundry.sh/getting-started/installation), then `forge init --template lazertechnologies/lazerforge contracts` (use `--branch minimal` for a slimmer tree). Ship `MutantFund.sol` under `contracts/src/` and run deploys via `forge script` (see LazerForge’s deployment docs in-repo).
 
 **P0 — Evolutionary Engine (TypeScript)**
@@ -141,7 +162,7 @@ Each mutant has a **genome** — strategy parameters:
 - Take-profit % (5-30%)
 - Asset preference (ETH, BTC, SOL, etc.)
 - Timeframe (scalp: 1h, swing: 4h-1d)
-- Position size (% of **allocated capital** — see `capital_allocation` in schema)
+- Position size (% of **effective trading notional** = that mutant’s **own bankroll** × `capital_allocation` — see schema). `capital_allocation` is an evolution **multiplier** (0 = benched, >1 boosted), **not** a claim on other mutants’ escrow or a pooled AUM share.
 
 **Fitness (multi-term, regime-aware)**  
 Fitness is a weighted composite (tune weights in `fitness.ts`; expose constants for judges):
@@ -169,13 +190,14 @@ Exact percentages can be **population-size aware** (e.g. minimum 1 explorer in t
 **Mutation:** ±10% random adjustments on offspring parameters (clamp to allowed ranges).
 
 **Capital allocation and cull**  
-Prefer **reallocation before deletion**: weak mutants **lose trading budget first** (`capital_allocation` → lower or 0) while rows stay for audit. **Cull** the worst tier when fitness stays poor across windows or after repeated strips — set `lifecycle_status` to `culled`; keep history, trades, and ERC-8004 id for receipts.
+Prefer **reallocation before deletion**: weak mutants **lose trading budget first** by lowering **`capital_allocation`** (a multiplier on **their** bankroll-only sizing) toward **0** while rows stay for audit. **Cull** the worst tier when fitness stays poor across windows or after repeated strips — set `lifecycle_status` to `culled`; **escrowed USDC remains** under the **same** NFT until redeemed or **revived**; keep history, trades, and ERC-8004 id for receipts.
 
-**Revival (fee → probationary clone; not pay-to-win)**  
-- A **revival fee** pays for a **new** mutant that is a **probationary clone** of a **culled** lineage (copy genome snapshot **± optional small jitter**), **not** a full restore of rank, guaranteed capital, or past PnL.
-- **Rules:** clone starts at **capped low** `capital_allocation`; **no breeding rights** for **1–2** generations; `revival_count` / lineage metadata records `revived_from_mutant_id`; **at most one revival per source mutant per configurable window** (e.g. N generations).
-- **Fee routing:** revival proceeds go to **treasury / exploration pool** — **do not** credit the fee directly as extra trading capital for that clone (prevents whales buying leaderboard slots).
-- **Edge cases:** if population is near minimum, cap revivals per cycle; reject revival if source is not `culled` or cooldown violated; optional minimum fee in USDC set by config.
+**Revival (fee → same NFT, new strategy; not pay-to-win)**  
+- A **revival payment** **reactivates the same** ERC-8004 token id after **cull** or **depleted bankroll** (policy-defined). The mutant gets a **brand-new genome** (new strategy), **not** a replay of the old parameters unless you explicitly document otherwise.
+- **Fee split:** a **revival protocol fee** (configurable bps, documented onchain or in config) goes to **protocol treasury**; the **net remainder is credited** to that **same** mutant’s **bankroll** as the new seed (auditable in txs + DB).
+- **Rules:** after revival, **capped low** `capital_allocation`; **no breeding rights** for **1–2** generations; increment `revival_count`; **at most one revival per token per configurable window** (e.g. N generations or wall-clock cooldown).
+- **Not pay-to-win:** revival does **not** restore prior **elite tier**, historical peak PnL, or old **high-water mark** for performance fees — recommend **resetting HWM** to the post-revival bankroll baseline.
+- **Edge cases:** if population is near minimum, cap revivals per cycle; reject revival if token is not `culled`/eligible or cooldown violated; optional minimum revival payment in USDC; NFT transfer means **only the current holder** can revive or redeem.
 
 **P0 — Vercel Cron + orchestrator route**
 - `vercel.json` defines a [`crons`](https://vercel.com/docs/cron-jobs) entry pointing at a single secured API route (e.g. `GET /api/cron/orchestrator`)
@@ -235,7 +257,7 @@ This maps directly to Synthesis / Bankr judging emphasis: **real execution, real
 ### Risk Management (Hardcoded Guardrails)
 - Max leverage: 10x (conservative for Avantis)
 - Stop-loss: mandatory per position (genome-defined, min 3%)
-- Max single position: 30% of agent's capital
+- Max single position: 30% of that mutant’s **effective** capital (bankroll × `capital_allocation`)
 - Max total portfolio drawdown: 20% → auto-halt all trading
 - Min time between trades: 15 minutes
 - Max daily trades: 20 per strategy
@@ -265,15 +287,15 @@ This maps directly to Synthesis / Bankr judging emphasis: **real execution, real
 - [ ] Env: `OPENAI_API_KEY` (server-only) for `TraderProfile` text + image generation scripts or secured routes
 
 ### Agent interface + onchain
-- [ ] Write `public/skill.md` — fund mechanics + API for agents
-- [ ] Build API routes: `POST /api/invest`, `GET /api/mutants`, `GET /api/mutants/[id]`, `GET /api/evolution`, `POST /api/revive`, `GET /api/status`
-- [ ] Write Solidity escrow (`MutantFund.sol`); deploy Base (testnet first, then mainnet as required) using Foundry + [LazerForge](https://github.com/LazerTechnologies/LazerForge) (`forge init --template lazertechnologies/lazerforge contracts`, then `forge build` / `forge script` per LazerForge deployment guide)
+- [ ] Write `public/skill.md` — fund mechanics + API for agents (per-mutant bankroll, **20%** performance fee on realized profit above HWM, redemption, same-NFT revival)
+- [ ] Build API routes: `POST /api/invest`, `POST /api/redeem` (or `withdraw`), `GET /api/mutants`, `GET /api/mutants/[id]`, `GET /api/evolution`, `POST /api/revive`, `GET /api/status`
+- [ ] Write Solidity escrow (`MutantFund.sol`): `deposit`, `redeem`, **20%** performance fee + HWM, `revive` (same NFT, revival fee split); deploy Base (testnet first, then mainnet as required) using Foundry + [LazerForge](https://github.com/LazerTechnologies/LazerForge) (`forge init --template lazertechnologies/lazerforge contracts`, then `forge build` / `forge script` per LazerForge deployment guide)
 
 ### Evolutionary engine
 - [ ] Define strategy genome type; random population init + **exploration** immigrants each cycle
 - [ ] Fitness: multi-term composite (Sharpe-like, drawdown, turnover/fees, inactivity, correlation; optional novelty + treasury bonus); **regime-aware** multi-window blend
-- [ ] **Tiered selection** (elites / survivors / offspring / exploration); **capital allocation** before hard cull; parent choice favors **low correlation**
-- [ ] Crossover + mutation (±10%, clamped); revival path: **probationary clone** + cooldowns + fee to treasury
+- [ ] **Tiered selection** (elites / survivors / offspring / exploration); **capital allocation** (per-mutant multiplier on **own** bankroll) before hard cull; parent choice favors **low correlation**
+- [ ] Crossover + mutation (±10%, clamped); revival path: **same-NFT reactivation** + new genome + cooldowns + revival fee split (protocol vs bankroll seed)
 - [ ] Persist mutants and evolution history in Supabase (including `evolution_logs` tier + allocation fields)
 
 ### Trading + economics
@@ -322,7 +344,9 @@ mutant-fund/
 │   │   │       └── page.tsx  # Individual mutant detail page
 │   │   └── api/
 │   │       ├── invest/
-│   │       │   └── route.ts  # POST — agent deposits USDC, creates mutant
+│   │       │   └── route.ts  # POST — mint new mutant or top up bankroll (escrow deposit)
+│   │       ├── redeem/
+│   │       │   └── route.ts  # POST — NFT holder withdraws idle USDC (after fees / margin checks)
 │   │       ├── mutants/
 │   │       │   ├── route.ts  # GET — list all mutants
 │   │       │   └── [id]/
@@ -330,12 +354,12 @@ mutant-fund/
 │   │       ├── evolution/
 │   │       │   └── route.ts  # GET — evolution state + history + tier counts + allocation shifts
 │   │       ├── revive/
-│   │       │   └── route.ts  # POST — revival fee → probationary clone (treasury routing)
+│   │       │   └── route.ts  # POST — revival payment → same NFT, new genome; fee split + bankroll seed
 │   │       ├── cron/
 │   │       │   └── orchestrator/
 │   │       │       └── route.ts  # GET — Vercel Cron: full trading + evolution cycle (secret-gated)
 │   │       └── status/
-│   │           └── route.ts  # GET — fund health + AUM
+│   │           └── route.ts  # GET — fund health + aggregate TVL (sum of per-mutant escrow)
 │   ├── lib/
 │   │   ├── evolution/
 │   │   │   ├── genome.ts     # Strategy genome type + random init
@@ -344,7 +368,7 @@ mutant-fund/
 │   │   │   ├── crossover.ts  # Parameter crossover (low-correlation parent pairs)
 │   │   │   ├── mutation.ts   # Random mutation (clamped)
 │   │   │   ├── allocation.ts # Capital allocation + cull thresholds
-│   │   │   └── revival.ts    # Probationary clone + cooldown validation
+│   │   │   └── revival.ts    # Same-NFT revival eligibility + cooldown validation
 │   │   ├── trading/
 │   │   │   ├── bankr.ts      # Bankr API integration (Avantis trades)
 │   │   │   ├── uniswap.ts    # Uniswap swap execution
@@ -399,12 +423,16 @@ create table mutants (
   fee_treasury_address text,        -- Where creator fees are directed (per-trader)
   genome jsonb not null,            -- Strategy parameters
   fitness float default 0,
-  pnl float default 0,
+  pnl float default 0,               -- Display / rolling realized PnL (mirror onchain + trades; fee engine may use high_water_mark separately)
   generation integer default 0,
-  parent_ids uuid[],                -- Lineage tracking
-  revived_from_mutant_id uuid references mutants(id), -- set for probationary revival clones only
+  parent_ids uuid[],                -- Lineage tracking (breeding); revival keeps same row / token_id
   lifecycle_status text default 'active', -- active, culled, probation_revival, breeding, exploration_seed
-  capital_allocation numeric default 1.0 check (capital_allocation >= 0), -- fraction of baseline trading budget (0 = benched)
+  capital_allocation numeric default 1.0 check (capital_allocation >= 0), -- multiplier on this mutant's own bankroll for position sizing (0 = benched)
+  principal_deposited numeric default 0,   -- net USDC deposited into this mutant's escrow (mirror contract)
+  reserved_margin numeric default 0,       -- USDC / notional locked in open positions (off-chain or synced)
+  withdrawable_balance numeric default 0,  -- idle USDC available to redeem after fees (mirror or derived)
+  high_water_mark numeric default 0,       -- post-fee equity high-water mark for 20% performance fee on new realized profit
+  last_revival_at timestamptz,             -- last same-NFT revival timestamp
   revival_count integer default 0 not null,
   novelty_score float default 0,          -- optional diversity signal
   correlation_score float default 0,      -- optional crowding vs cohort (rolling)
@@ -436,7 +464,7 @@ create table evolution_logs (
   offspring_ids uuid[],
   explorer_ids uuid[],              -- random "immigrant" genomes this cycle
   culled uuid[],
-  revived_ids uuid[],               -- probationary clones created via POST /api/revive this cycle (if any)
+  revived_ids uuid[],               -- mutant rows same-NFT reactivated via POST /api/revive this cycle (if any)
   tier_counts jsonb,                -- e.g. {"elite":2,"survivor":6,"offspring":3,"exploration":1}
   allocation_summary jsonb,         -- capital reallocations / notable per-id deltas for dashboards
   mutations jsonb,                  -- what params changed (offspring)
@@ -495,7 +523,7 @@ Together this demonstrates **real execution**, **real onchain outcomes**, and **
 
 > "Mutant Fund — your money, evolved.
 >
-> Deposit USDC → mint a Mutant — an ERC-8004 agent with unique trading traits. Your mutant joins a population of competing strategies on Base. Every cycle, **tiered selection** reshapes the roster: elites hold ground, survivors keep trading with real **capital allocation**, offspring inherit **mutated** traits from **low-correlation** parents, and fresh explorers keep the gene pool honest. The weak lose budget first, then get culled. Optional **revival** is a **probationary clone** — not a pay-to-win reset.
+> Deposit USDC → mint a Mutant — an ERC-8004 agent with unique trading traits. **Your USDC backs that mutant’s own on-escrow bankroll**; you’re not buying a blind pool slice. When the strategy **realizes profit**, the protocol takes **20%** of new profit above a **high-water mark** — then **you** (the **current NFT holder**) can **redeem idle USDC** when margin isn’t locked. Your mutant joins a population of competing strategies on Base. Every cycle, **tiered selection** reshapes the roster: elites hold ground, survivors keep trading with **sizing multipliers** on **their** bankroll, offspring inherit **mutated** traits from **low-correlation** parents, and fresh explorers keep the gene pool honest. The weak lose budget first, then get culled. **Revival** is **the same NFT** with a **new strategy** and a **fresh bankroll seed** after a **revival fee** — not a pay-to-win reset of the old edge.
 >
 > No single strategy to blow up. No black box. Every trade and mutation logged onchain. Human guardrails enforced by smart contract.
 >
