@@ -33,6 +33,7 @@ export const MUTANT_ACCOUNTING_ABI = [
     stateMutability: "nonpayable",
     inputs: [
       { name: "agentId", type: "uint256" },
+      { name: "marginToRelease", type: "uint256" },
       { name: "pnl", type: "int256" },
     ],
     outputs: [],
@@ -96,13 +97,13 @@ export async function recordAllocation(agentId: bigint, amount: bigint) {
   });
 }
 
-export async function recordSettlement(agentId: bigint, pnl: bigint) {
+export async function recordSettlement(agentId: bigint, marginToRelease: bigint, pnl: bigint) {
   return getWalletClient().writeContract({
     chain: base,
     address: CONTRACT_ADDRESS,
     abi: MUTANT_ACCOUNTING_ABI,
     functionName: "recordSettlement",
-    args: [agentId, pnl],
+    args: [agentId, marginToRelease, pnl],
   });
 }
 

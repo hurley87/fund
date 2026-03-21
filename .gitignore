@@ -37,6 +37,14 @@ yarn-error.log*
 # claude worktrees
 .claude/worktrees/
 
+# mcp config (contains secrets)
+.mcp.json
+
+# foundry
+contracts/cache/
+contracts/out/
+contracts/lib/
+
 # vercel
 .vercel
 

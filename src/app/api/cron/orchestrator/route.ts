@@ -50,6 +50,7 @@ export async function GET(request: Request) {
 
           await enqueue("record_settlement", {
             agentId: trade.mutant_id,
+            marginToRelease: trade.amount ?? 0,
             pnl: 0,
           });
 

@@ -1,15 +1,16 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
+import {Ownable} from "openzeppelin-contracts/access/Ownable.sol";
+
 /**
  * @title MutantAccounting
  * @notice Public onchain accounting ledger for the Mutant Fund.
  *         This contract records state changes for transparency only —
  *         USDC lives in the Bankr operational wallet, not here.
  */
-contract MutantAccounting {
+contract MutantAccounting is Ownable {
     // ── State ──────────────────────────────────────────────────────────
-    address public orchestrator;
     address public protocolTreasury;
 
     mapping(uint256 => uint256) public bankroll;
@@ -25,20 +26,11 @@ contract MutantAccounting {
     event Withdrawal(uint256 indexed agentId, uint256 amount, uint256 newBankroll);
 
     // ── Errors ─────────────────────────────────────────────────────────
-    error OnlyOrchestrator();
     error InsufficientWithdrawable(uint256 requested, uint256 available);
     error InsufficientBankroll();
-    error InsufficientMargin();
-
-    // ── Modifiers ──────────────────────────────────────────────────────
-    modifier onlyOrchestrator() {
-        if (msg.sender != orchestrator) revert OnlyOrchestrator();
-        _;
-    }
 
     // ── Constructor ────────────────────────────────────────────────────
-    constructor(address _orchestrator, address _protocolTreasury) {
-        orchestrator = _orchestrator;
+    constructor(address _protocolTreasury) {
         protocolTreasury = _protocolTreasury;
     }
 
@@ -48,27 +40,32 @@ contract MutantAccounting {
      * @notice Record a deposit into an agent's bankroll.
      *         Sets the high-water mark on first deposit.
      */
-    function recordDeposit(uint256 agentId, uint256 amount) external onlyOrchestrator {
-        bool firstDeposit = bankroll[agentId] == 0 && highWaterMark[agentId] == 0;
-        bankroll[agentId] += amount;
+    function recordDeposit(uint256 agentId, uint256 amount) external onlyOwner {
+        uint256 bal = bankroll[agentId];
+        bool firstDeposit = bal == 0 && highWaterMark[agentId] == 0;
+        bal += amount;
+        bankroll[agentId] = bal;
 
         if (firstDeposit) {
-            highWaterMark[agentId] = bankroll[agentId];
+            highWaterMark[agentId] = bal;
         }
 
-        emit Deposit(agentId, amount, bankroll[agentId]);
+        emit Deposit(agentId, amount, bal);
     }
 
     /**
      * @notice Lock margin for an upcoming trade.
      */
-    function recordAllocation(uint256 agentId, uint256 amount) external onlyOrchestrator {
-        uint256 withdrawable = bankroll[agentId] - reservedMargin[agentId];
+    function recordAllocation(uint256 agentId, uint256 amount) external onlyOwner {
+        uint256 bal = bankroll[agentId];
+        uint256 margin = reservedMargin[agentId];
+        uint256 withdrawable = bal - margin;
         if (amount > withdrawable) revert InsufficientWithdrawable(amount, withdrawable);
 
-        reservedMargin[agentId] += amount;
+        margin += amount;
+        reservedMargin[agentId] = margin;
 
-        emit Allocation(agentId, amount, reservedMargin[agentId]);
+        emit Allocation(agentId, amount, margin);
     }
 
     /**
@@ -76,45 +73,48 @@ contract MutantAccounting {
      *         Releases reserved margin, adjusts bankroll by pnl, and takes
      *         a 20 % performance fee on profits above the high-water mark.
      */
-    function recordSettlement(uint256 agentId, int256 pnl) external onlyOrchestrator {
-        // Release the margin that was reserved for this trade.
-        // For simplicity the margin released equals the absolute value of pnl
-        // capped to reservedMargin — the orchestrator is responsible for
-        // passing the correct pnl that corresponds to a previously allocated position.
+    function recordSettlement(uint256 agentId, uint256 marginToRelease, int256 pnl) external onlyOwner {
+        // Release the margin that was reserved for this trade
+        uint256 margin = reservedMargin[agentId];
+        if (marginToRelease > margin) marginToRelease = margin;
+        reservedMargin[agentId] = margin - marginToRelease;
 
+        uint256 bal = bankroll[agentId];
         if (pnl >= 0) {
-            // Profitable or break-even trade
-            bankroll[agentId] += uint256(pnl);
+            bal += uint256(pnl);
         } else {
             uint256 loss = uint256(-pnl);
-            if (loss > bankroll[agentId]) revert InsufficientBankroll();
-            bankroll[agentId] -= loss;
+            if (loss > bal) revert InsufficientBankroll();
+            bal -= loss;
         }
 
         // Performance fee: 20 % of any amount above high-water mark
         uint256 fee = 0;
         uint256 hwm = highWaterMark[agentId];
 
-        if (bankroll[agentId] > hwm) {
-            fee = (bankroll[agentId] - hwm) * 20 / 100;
-            bankroll[agentId] -= fee;
+        if (bal > hwm) {
+            fee = (bal - hwm) * 20 / 100;
+            bal -= fee;
             treasuryAccrued += fee;
-            highWaterMark[agentId] = bankroll[agentId];
+            highWaterMark[agentId] = bal;
         }
 
-        emit Settlement(agentId, pnl, fee, bankroll[agentId], highWaterMark[agentId]);
+        bankroll[agentId] = bal;
+        emit Settlement(agentId, pnl, fee, bal, highWaterMark[agentId]);
     }
 
     /**
      * @notice Record a withdrawal. Amount must not exceed withdrawable balance.
      */
-    function recordWithdrawal(uint256 agentId, uint256 amount) external onlyOrchestrator {
-        uint256 withdrawable = bankroll[agentId] - reservedMargin[agentId];
+    function recordWithdrawal(uint256 agentId, uint256 amount) external onlyOwner {
+        uint256 bal = bankroll[agentId];
+        uint256 withdrawable = bal - reservedMargin[agentId];
         if (amount > withdrawable) revert InsufficientWithdrawable(amount, withdrawable);
 
-        bankroll[agentId] -= amount;
+        bal -= amount;
+        bankroll[agentId] = bal;
 
-        emit Withdrawal(agentId, amount, bankroll[agentId]);
+        emit Withdrawal(agentId, amount, bal);
     }
 
     // ── View Functions ─────────────────────────────────────────────────

@@ -10,6 +10,8 @@
 
 **Core implementation complete.** All 16 GitHub issues built. TypeScript compiles clean. No tests exist.
 
+**MutantAccounting contract deployed** to Base mainnet at `0x219fd3e0fd338224e7dd00ee2f2d7d1b6e6ec2c3`. Owner: `0xbe523e724b9ea7d618dd093f14618d90c4b19b0c`. Contract refactored to use OpenZeppelin `Ownable` instead of custom orchestrator modifier.
+
 ## Architecture
 
 ```
@@ -65,7 +67,9 @@ Agent/Human → POST /api/invest (x402 USDC) → Spawn Mutant
 |------|---------|
 | `src/lib/identity/erc8004.ts` | `registerAgent()`, `transferNFT()`, `ownerOf()` — viem-based ERC-8004 identity registry interaction |
 | `src/lib/contract/accounting.ts` | `recordDeposit/Allocation/Settlement/Withdrawal()`, `getBalance/Withdrawable/HWM()` — MutantAccounting contract |
-| `contracts/src/MutantAccounting.sol` | Solidity ledger: deposits, margin allocation, settlement with 20% performance fee above HWM, withdrawals |
+| `contracts/src/MutantAccounting.sol` | Solidity ledger: deposits, margin allocation, settlement with 20% performance fee above HWM, withdrawals. Uses OZ `Ownable`. |
+| `contracts/script/MutantAccounting.s.sol` | Foundry deployment script — reads `TREASURY_ADDRESS` and `DEPLOYER_PRIVATE_KEY` from env |
+| `contracts/foundry.toml` | Foundry config: Solc 0.8.28, Prague EVM, OZ + Solady + forge-std remappings, RPC endpoints for Base/Sepolia/Anvil |
 
 ### Personality & Queue
 | File | Purpose |
@@ -136,7 +140,6 @@ Agent/Human → POST /api/invest (x402 USDC) → Spawn Mutant
 ## Known Risks & Gaps
 
 - **Hackathon deadline: 2026-03-22** (1 day remaining)
-- **Contract not deployed** to Base — Solidity exists but no deployment script or address
 - **tx-queue executeTx is a placeholder** — `console.log` + fake hash, not wired to real onchain calls
 - **No tests** of any kind
 - **No real x402 payment verification** — MVP accepts JSON body
