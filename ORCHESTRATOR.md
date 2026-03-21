@@ -6,109 +6,76 @@
 
 **Mutant Fund** — a decentralized autonomous hedge fund for the Synthesis hackathon (deadline: 2026-03-22). AI trading agents evolve strategies via natural selection on Base. Deposit USDC → mint an ERC-8004 NFT mutant → strategies compete and evolve.
 
-## Current State (2026-03-20)
+## Current State (2026-03-21)
 
-**Scaffold only.** The repo is a fresh Next.js 16.2 app with almost no custom code. Everything described in `docs/mutant-fund.md` is spec, not implementation.
+**Core implementation complete.** All 16 GitHub issues built across 3 waves of parallel agent teams. TypeScript compiles clean.
 
 ### What exists
 
-| Layer | Status |
-|-------|--------|
-| Next.js 16 app shell | `src/app/page.tsx` (default template), `src/app/layout.tsx` (Geist fonts, dark mode ready) |
-| UI library | shadcn/ui v4 (base-nova style), `@base-ui/react`, CVA, Tailwind v4, `tw-animate-css`. One component: `src/components/ui/button.tsx` |
-| Utility | `src/lib/utils.ts` — `cn()` (clsx + tailwind-merge) |
-| Config | `components.json` (shadcn), `eslint.config.mjs` (next core-web-vitals + TS), `postcss.config.mjs` (@tailwindcss/postcss), `tsconfig.json` (`@/*` → `./src/*`) |
-| Docs | `docs/mutant-fund.md` — comprehensive 700-line spec (architecture, schema, API, evolution, trading, tokenomics, prize targeting) |
-| Public assets | Default Next.js SVGs only |
+| Layer | Files |
+|-------|-------|
+| **DB** | `src/lib/db/supabase.ts`, `types.ts`, `demo-data.ts`; `supabase/migrations/001_init.sql` |
+| **Config** | `src/lib/config/env.ts`, `risk.ts`; `.env.example`; `vercel.json` (cron) |
+| **Evolution** | `src/lib/evolution/genome.ts`, `mutation.ts`, `crossover.ts`, `fitness.ts` |
+| **Trading** | `src/lib/trading/signal.ts`, `market-data.ts`, `bankr.ts` |
+| **Identity** | `src/lib/identity/erc8004.ts` |
+| **Personality** | `src/lib/personality/generate.ts` (OpenAI text + image) |
+| **Contract** | `contracts/src/MutantAccounting.sol`; `src/lib/contract/accounting.ts` (viem) |
+| **Tx Queue** | `src/lib/queue/tx-queue.ts` |
+| **API Routes** | `invest`, `redeem`, `mutants`, `mutants/[id]`, `mutants/[id]/registration.json`, `evolution`, `status`, `cron/orchestrator`, `cron/evolution` |
+| **Dashboard** | Landing page, mutant grid (`/dashboard`), mutant detail (`/mutants/[id]`) |
+| **Components** | `mutant-card.tsx`, `ui/button.tsx` |
+| **Agent Interface** | `public/skill.md` |
+| **UI** | shadcn/ui v4, Tailwind v4, dark theme |
 
-### What does NOT exist yet (all planned)
+### What does NOT exist yet
 
-- **No API routes** (invest, redeem, mutants, evolution, revive, status, cron)
-- **No Solidity contracts** (no `contracts/` dir, no MutantFund.sol)
-- **No evolutionary engine** (genome, fitness, selection, crossover, mutation, allocation, revival)
-- **No trading layer** (orchestrator, router, bankr, uniswap, locus, market-data, token)
-- **No analysis** (multi-model LLM gateway)
-- **No identity** (ERC-8004 management)
-- **No DB** (no Supabase client, no schema applied)
-- **No config modules** (risk.ts, trader-strategies.ts, env.ts, trader-profiles.ts)
-- **No dashboard components** (mutant-card, evolution-timeline, fitness-chart)
-- **No `skill.md`** (agent interface)
-- **No `vercel.json`** (cron config)
-- **No tests**
+- Solidity deployment (contract written but not deployed)
+- Real x402 payment verification (MVP accepts JSON body)
+- Real signature verification in redeem (MVP trusts signer field)
+- Token launch + Locus micro-sites (stretch goals, Issue #17)
+- Tests
 
-## Architecture (from spec)
+## Architecture
 
 ```
-Agents/Humans → skill.md / API → Escrow Contract (Base) → ERC-8004 Mutant NFTs
-                                          ↓
-                              Evolutionary Trading Engine (Vercel Cron)
-                              ├── Trading: every 15 min
-                              └── Evolution: every 24h
-                                    ↓
-                    Mutants (Sprint, Reverb, Carry, Omen)
-                    Each has: genome, bankroll, Bankr token, LP
-                                    ↓
-                    Venues: Bankr/Avantis (perps), Uniswap (spot)
-                    Data: DexScreener (Base pairs, no candles)
-                                    ↓
-                    Next.js Dashboard + Per-mutant Locus sites (stretch)
+Agent/Human → POST /api/invest (x402 USDC) → Spawn Mutant
+                                                ↓
+                                  ┌─────────────┼─────────────┐
+                                  ↓             ↓             ↓
+                            Register        Generate       Record
+                            ERC-8004        Personality    Deposit
+                            (Base)          (OpenAI)       (Contract)
+                                  ↓
+                    Vercel Cron (15min): Signal → Risk → Execute
+                    Vercel Cron (daily): Fitness → Select → Breed → Cull
+                                  ↓
+                    Dashboard (Next.js) — grid, detail, stats
 ```
 
-## Key Conventions & Constraints
+## Key Conventions
 
-- **Next.js 16.2** — AGENTS.md warns: "This is NOT the Next.js you know." Must read `node_modules/next/dist/docs/` before writing Next.js code.
+- **Next.js 16.2** with App Router, async params pattern
 - **Path alias:** `@/*` → `./src/*`
-- **UI:** shadcn/ui v4 base-nova style, `@base-ui/react` primitives, CVA for variants, Tailwind v4
-- **Chain:** Base-only for all live execution (MVP). Non-Base = paper/simulation.
-- **Risk guardrails:** max 10x leverage, mandatory stop-loss (min 3%), max 30% single position, 20% drawdown halt, 15 min between trades, 20 max daily trades
-- **Execution model:** evaluation-driven, not force-trade. Outcomes: `trade_executed`, `no_trade_signal`, `blocked_by_risk`, `blocked_by_limits`
-- **Trading vs evolution:** separate cadences (15 min vs 24h). Never breed/mutate on trading ticks.
-- **Market data:** DexScreener-only. No candle APIs. Snapshot metrics (m5/h1/h6/h24 price change, volume, liquidity, txn counts).
-- **Per-mutant economics:** each mutant has own bankroll (not pooled), own Bankr token, own fee treasury. 20% performance fee on realized profit above HWM.
-- **Config source of truth (planned):** `src/lib/config/risk.ts`, `src/lib/config/trader-strategies.ts`
-- **Solidity tooling:** Foundry + LazerForge template
-
-## Seed Traders
-
-| Name | Strategy | Venue | Symbol |
-|------|----------|-------|--------|
-| Sprint | Momentum/trend | Bankr/Avantis (perps) | SPRINT |
-| Reverb | Mean-reversion | Uniswap (spot) | REVERB |
-| Carry | Funding/basis arb | Bankr/Avantis | CARRY (paper until funding feed) |
-| Omen | Discretionary/narrative | Paper mode first | OMEN |
-
-## Supabase Schema (planned)
-
-Three tables: `mutants` (40+ columns), `trades`, `evolution_logs`. See `docs/mutant-fund.md` lines 548-624.
-
-## Planned File Structure
-
-See `docs/mutant-fund.md` lines 469-543 for the full tree.
-
-Key module boundaries:
-- `src/lib/evolution/` — genome, fitness, selection, crossover, mutation, allocation, revival
-- `src/lib/trading/` — orchestrator, router, bankr, uniswap, locus, token, market-data
-- `src/lib/analysis/` — multi-model LLM
-- `src/lib/identity/` — ERC-8004
-- `src/lib/db/` — Supabase client
-- `src/lib/config/` — risk, strategies, env, trader-profiles
-- `src/app/api/` — REST endpoints
-- `contracts/src/` — Solidity (Foundry)
+- **Chain:** Base-only (chainId 8453)
+- **Risk guardrails:** Hardcoded in `risk.ts`
+- **Genome:** 8 continuous genes, strategy type = `signal_bias` gene
+- **Signal math:** Deterministic (momentum/reversion blend). LLM reasoning is post-hoc only.
+- **Execution:** Bankr Agent API → Avantis perps on Base
 
 ## Decisions Made
 
-(None yet — this section tracks decisions as the thread progresses)
+- No pre-seeded traders — users spawn on demand
+- One Bankr wallet for all trades (per-trader accounting in Supabase + contract)
+- Accounting contract is a ledger, not a vault
+- Demo data fallback for dashboard when Supabase unavailable
+- x402 payment simplified to JSON body for hackathon MVP
+- Genome stored in DB with evolution-compatible `_raw` field for crossover/mutation
 
-## Known Risks & Fragile Areas
+## Known Risks
 
-- **Hackathon deadline: 2026-03-22** (2 days from now)
-- Next.js 16 may have breaking changes vs training data — must consult docs
-- No tests infrastructure at all
-- Carry strategy is blocked until a funding rate data source is wired
-- Omen starts in paper mode only
-- DexScreener rate limits need handling
-- Cron overlap guard needed to prevent double-trading
-
-## Subagent History
-
-(Updated as subagents complete work)
+- **Hackathon deadline: 2026-03-22** (1 day remaining)
+- Contract not yet deployed to Base
+- No tests
+- DexScreener rate limits need handling in production
+- Bankr API integration untested with real trades
