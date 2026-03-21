@@ -23,6 +23,10 @@ export const GENE_RANGES: Record<keyof Genome, { min: number; max: number }> = {
   entry_threshold:   { min: 0.01, max: 0.10 },
 };
 
+export function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
 function randInRange(min: number, max: number): number {
   return min + Math.random() * (max - min);
 }

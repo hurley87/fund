@@ -1,8 +1,4 @@
-import { Genome, GENE_RANGES, ASSET_ALLOWLIST } from './genome';
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value));
-}
+import { Genome, GENE_RANGES, ASSET_ALLOWLIST, clamp } from './genome';
 
 /**
  * Mutate a genome by applying +/-10% random adjustment to each gene.

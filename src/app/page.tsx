@@ -1,13 +1,12 @@
 import Link from "next/link";
 import { DEMO_MUTANTS, DEMO_TRADES } from "@/lib/db/demo-data";
+import { getBaseUrl } from "@/lib/utils";
 
 async function getStats() {
   // In production, fetch from the API or directly from Supabase.
   // For the hackathon we try the API first and fall back to demo data.
   try {
-    const base = process.env.NEXT_PUBLIC_SITE_URL ?? process.env.VERCEL_URL
-      ? `https://${process.env.VERCEL_URL}`
-      : "http://localhost:3000";
+    const base = getBaseUrl();
     const res = await fetch(`${base}/api/status`, { next: { revalidate: 60 } });
     if (res.ok) return res.json() as Promise<{ tvl: number; active_mutants: number; total_trades: number }>;
   } catch {

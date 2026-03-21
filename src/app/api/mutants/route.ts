@@ -15,11 +15,11 @@ export async function GET(request: Request) {
         .eq('lifecycle_status', status)
         .order('created_at', { ascending: false });
       if (error) throw error;
-      return NextResponse.json({ mutants: data });
+      return NextResponse.json(data);
     }
 
     const data = await mutants.list();
-    return NextResponse.json({ mutants: data });
+    return NextResponse.json(data);
   } catch (err) {
     console.error('[api/mutants] GET error:', err);
     return NextResponse.json(

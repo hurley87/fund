@@ -1,8 +1,4 @@
-import { Genome, GENE_RANGES } from './genome';
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value));
-}
+import { Genome, GENE_RANGES, clamp } from './genome';
 
 /**
  * Uniform crossover: randomly pick each gene from one parent.

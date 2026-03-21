@@ -2,7 +2,8 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import type { Mutant, Trade } from "@/lib/db/types";
 import { DEMO_MUTANTS, DEMO_TRADES } from "@/lib/db/demo-data";
-import { cn } from "@/lib/utils";
+import { cn, getBaseUrl } from "@/lib/utils";
+import { STATUS_COLORS } from "@/lib/ui/constants";
 
 interface MutantWithTrades extends Mutant {
   trades: Trade[];
@@ -10,9 +11,7 @@ interface MutantWithTrades extends Mutant {
 
 async function getMutant(id: string): Promise<MutantWithTrades | null> {
   try {
-    const base = process.env.NEXT_PUBLIC_SITE_URL ?? process.env.VERCEL_URL
-      ? `https://${process.env.VERCEL_URL}`
-      : "http://localhost:3000";
+    const base = getBaseUrl();
     const res = await fetch(`${base}/api/mutants/${id}`, { next: { revalidate: 30 } });
     if (res.ok) {
       const data = await res.json();
@@ -27,14 +26,6 @@ async function getMutant(id: string): Promise<MutantWithTrades | null> {
   const trades = DEMO_TRADES.filter((t) => t.mutant_id === id);
   return { ...mutant, trades };
 }
-
-const STATUS_COLORS: Record<string, string> = {
-  active: "bg-green-500/20 text-green-400 border-green-500/30",
-  benched: "bg-yellow-500/20 text-yellow-400 border-yellow-500/30",
-  culled: "bg-red-500/20 text-red-400 border-red-500/30",
-  probation: "bg-orange-500/20 text-orange-400 border-orange-500/30",
-  awaiting_deposit: "bg-blue-500/20 text-blue-400 border-blue-500/30",
-};
 
 const GENE_LABELS: Record<string, { label: string; format: (v: number) => string; max: number }> = {
   signal_bias: { label: "Signal Bias", format: (v) => v < 0.4 ? "Reversion" : v > 0.6 ? "Momentum" : "Balanced", max: 1 },

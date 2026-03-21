@@ -1,12 +1,9 @@
 import {
-  createPublicClient,
-  createWalletClient,
-  http,
   parseEventLogs,
   type Abi,
 } from "viem";
 import { base } from "viem/chains";
-import { privateKeyToAccount } from "viem/accounts";
+import { getPublicClient, getWalletClient } from "@/lib/viem/clients";
 
 // ── ABI (minimal) ─────────────────────────────────────────────────────
 
@@ -51,27 +48,6 @@ export const IDENTITY_REGISTRY_ABI = [
 
 const REGISTRY_ADDRESS = (process.env.ERC8004_REGISTRY_ADDRESS ??
   "0x8004A169FB4a3325136EB29fA0ceB6D2e539a432") as `0x${string}`;
-
-const ORCHESTRATOR_PRIVATE_KEY = process.env
-  .ORCHESTRATOR_PRIVATE_KEY as `0x${string}`;
-
-// ── Clients ───────────────────────────────────────────────────────────
-
-function getPublicClient() {
-  return createPublicClient({
-    chain: base,
-    transport: http(),
-  });
-}
-
-function getWalletClient() {
-  const account = privateKeyToAccount(ORCHESTRATOR_PRIVATE_KEY);
-  return createWalletClient({
-    account,
-    chain: base,
-    transport: http(),
-  });
-}
 
 // ── Exports ───────────────────────────────────────────────────────────
 

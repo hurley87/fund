@@ -5,21 +5,11 @@ import { randomGenome, type Genome } from "@/lib/evolution/genome";
 import { crossover } from "@/lib/evolution/crossover";
 import { mutate } from "@/lib/evolution/mutation";
 import { computeFitness } from "@/lib/evolution/fitness";
-import { env } from "@/lib/config/env";
+import { verifyCronSecret } from "@/lib/api/cron-auth";
 
 const SMALL_POP_THRESHOLD = 6;
 const ELITE_PCT = 0.15;
 const SURVIVOR_PCT = 0.45;
-
-function verifyCronSecret(request: Request): boolean {
-  const authHeader = request.headers.get("authorization");
-  const url = new URL(request.url);
-  const querySecret = url.searchParams.get("cron_secret");
-  const expected = env.cronSecret;
-  if (authHeader === `Bearer ${expected}`) return true;
-  if (querySecret === expected) return true;
-  return false;
-}
 
 function allocateTiers(total: number) {
   const eliteCount = Math.max(1, Math.floor(total * ELITE_PCT));
@@ -164,6 +154,7 @@ export async function GET(request: Request) {
     }
 
     // Produce offspring
+    const offspringIds: string[] = [];
     for (let i = 0; i < offspringCount; i++) {
       if (parentPool.length < 2) break;
       try {
@@ -171,7 +162,7 @@ export async function GET(request: Request) {
         const childGenome = mutate(crossover(toEvolutionGenome(p1), toEvolutionGenome(p2)));
         const generation = Math.max(p1.generation ?? 0, p2.generation ?? 0) + 1;
 
-        await sb.from("mutants").insert({
+        const { data: child } = await sb.from("mutants").insert({
           genome: childGenome,
           lifecycle_status: "awaiting_deposit",
           capital_allocation: 0,
@@ -179,7 +170,8 @@ export async function GET(request: Request) {
           generation,
           parent_ids: [p1.id, p2.id],
           trades_today: 0,
-        });
+        }).select('id').single();
+        if (child) offspringIds.push(child.id);
         summary.offspring++;
       } catch (err) {
         summary.errors.push(`offspring ${i}: ${err instanceof Error ? err.message : String(err)}`);
@@ -212,7 +204,7 @@ export async function GET(request: Request) {
       generation: maxGen,
       elite_ids: elites.map((e) => e.mutant.id),
       survivor_ids: survivors.map((s) => s.mutant.id),
-      offspring_ids: [],
+      offspring_ids: offspringIds,
       culled_ids: [],
       tier_counts: {
         elites: summary.elites,

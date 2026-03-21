@@ -10,19 +10,9 @@ import {
   isDrawdownHalted,
   RISK_GUARDRAILS,
 } from "@/lib/config/risk";
-import { env } from "@/lib/config/env";
 import { processQueue, enqueue } from "@/lib/queue/tx-queue";
 import { ASSET_ALLOWLIST } from "@/lib/evolution/genome";
-
-function verifyCronSecret(request: Request): boolean {
-  const authHeader = request.headers.get("authorization");
-  const url = new URL(request.url);
-  const querySecret = url.searchParams.get("cron_secret");
-  const expected = env.cronSecret;
-  if (authHeader === `Bearer ${expected}`) return true;
-  if (querySecret === expected) return true;
-  return false;
-}
+import { verifyCronSecret } from "@/lib/api/cron-auth";
 
 export async function GET(request: Request) {
   if (!verifyCronSecret(request)) {
@@ -48,30 +38,28 @@ export async function GET(request: Request) {
       .is("exit_price", null);
 
     if (openTrades && openTrades.length > 0) {
-      for (const trade of openTrades) {
-        try {
+      const results = await Promise.allSettled(
+        openTrades.map(async (trade) => {
           const job = await pollJob(trade.bankr_job_id);
-          if (!job || job.status !== "completed") continue;
+          if (!job || job.status !== "completed") return;
 
-          // Update the trade row
           await sb
             .from("trades")
-            .update({
-              exit_price: 0,
-              pnl: 0,
-            })
+            .update({ exit_price: 0, pnl: 0 })
             .eq("id", trade.id);
 
-          // Queue on-chain settlement
           await enqueue("record_settlement", {
             agentId: trade.mutant_id,
             pnl: 0,
           });
 
           summary.settled++;
-        } catch (err) {
+        })
+      );
+      for (const r of results) {
+        if (r.status === "rejected") {
           summary.errors.push(
-            `settle trade ${trade.id}: ${err instanceof Error ? err.message : String(err)}`
+            `settle: ${r.reason instanceof Error ? r.reason.message : String(r.reason)}`
           );
         }
       }
@@ -105,13 +93,22 @@ export async function GET(request: Request) {
   }
 
   // ── Phase 3: Trading loop ──────────────────────────────────────────
+  // Pre-fetch market data for unique assets to avoid redundant API calls
+  const marketDataCache = new Map<string, Awaited<ReturnType<typeof fetchMarketData>>>();
+  const resolveAssetName = (m: Mutant) =>
+    typeof m.genome.asset === "number"
+      ? ASSET_ALLOWLIST[m.genome.asset] ?? "ETH"
+      : String(m.genome.asset);
+  const uniqueAssets = new Set(eligible.map(resolveAssetName));
+  await Promise.all([...uniqueAssets].map(async (asset) => {
+    marketDataCache.set(asset, await fetchMarketData(asset));
+  }));
+
   for (const m of eligible) {
     try {
-      const assetName = typeof m.genome.asset === "number"
-        ? ASSET_ALLOWLIST[m.genome.asset] ?? "ETH"
-        : String(m.genome.asset);
+      const assetName = resolveAssetName(m);
 
-      const marketData = await fetchMarketData(assetName);
+      const marketData = marketDataCache.get(assetName) ?? null;
       if (!marketData) {
         summary.no_signal++;
         continue;
@@ -139,7 +136,7 @@ export async function GET(request: Request) {
         },
         {
           leverage: signal.leverage,
-          stopLoss: signal.stopPrice / signal.entryPrice,
+          stopLoss: Math.abs(signal.entryPrice - signal.stopPrice) / signal.entryPrice,
           positionSize: signal.size / (m.bankroll * m.capital_allocation || 1),
           pairLiquidity: marketData.liquidity_usd,
           pairVolume24h: marketData.volume_h24,

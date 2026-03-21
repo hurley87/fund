@@ -223,7 +223,7 @@ export async function POST(request: Request) {
       reserved_margin: 0,
       pnl: 0,
       fitness: 0,
-      capital_allocation: 0,
+      capital_allocation: 1.0,
       generation: parentIds ? Math.max(...active.map((m) => m.generation), 0) + 1 : 1,
       parent_ids: parentIds,
       lifecycle_status: 'active',

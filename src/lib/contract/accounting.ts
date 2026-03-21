@@ -1,11 +1,8 @@
 import {
-  createPublicClient,
-  createWalletClient,
-  http,
   type Abi,
 } from "viem";
 import { base } from "viem/chains";
-import { privateKeyToAccount } from "viem/accounts";
+import { getPublicClient, getWalletClient } from "@/lib/viem/clients";
 
 // ── ABI ────────────────────────────────────────────────────────────────
 
@@ -77,27 +74,6 @@ export const MUTANT_ACCOUNTING_ABI = [
 
 const CONTRACT_ADDRESS = process.env
   .MUTANT_ACCOUNTING_ADDRESS as `0x${string}`;
-const ORCHESTRATOR_PRIVATE_KEY = process.env
-  .ORCHESTRATOR_PRIVATE_KEY as `0x${string}`;
-
-// ── Clients ────────────────────────────────────────────────────────────
-
-function getPublicClient() {
-  return createPublicClient({
-    chain: base,
-    transport: http(),
-  });
-}
-
-function getWalletClient() {
-  const account = privateKeyToAccount(ORCHESTRATOR_PRIVATE_KEY);
-  return createWalletClient({
-    account,
-    chain: base,
-    transport: http(),
-  });
-}
-
 // ── Write Helpers ──────────────────────────────────────────────────────
 
 export async function recordDeposit(agentId: bigint, amount: bigint) {

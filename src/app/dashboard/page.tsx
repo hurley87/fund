@@ -2,12 +2,11 @@ import Link from "next/link";
 import type { Mutant } from "@/lib/db/types";
 import { MutantCard } from "@/components/mutant-card";
 import { DEMO_MUTANTS } from "@/lib/db/demo-data";
+import { getBaseUrl } from "@/lib/utils";
 
 async function getMutants(): Promise<Mutant[]> {
   try {
-    const base = process.env.NEXT_PUBLIC_SITE_URL ?? process.env.VERCEL_URL
-      ? `https://${process.env.VERCEL_URL}`
-      : "http://localhost:3000";
+    const base = getBaseUrl();
     const res = await fetch(`${base}/api/mutants`, { next: { revalidate: 30 } });
     if (res.ok) {
       const data = await res.json();
