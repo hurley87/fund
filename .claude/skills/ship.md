@@ -1,4 +1,7 @@
-Autonomously sync ORCHESTRATOR.md, review, simplify, build-verify, lint, commit, and push all uncommitted changes. Processes each file individually so one failure doesn't block the rest.
+---
+name: ship
+description: Autonomously sync ORCHESTRATOR.md, review, simplify, build-verify, lint, commit, and push all uncommitted changes. Processes each file individually so one failure doesn't block the rest.
+---
 
 ## Process
 
