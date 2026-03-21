@@ -10,7 +10,7 @@
 
 **Core implementation complete.** All 16 GitHub issues built. TypeScript compiles clean. No tests exist.
 
-**MutantAccounting contract deployed** to Base mainnet at `0x219fd3e0fd338224e7dd00ee2f2d7d1b6e6ec2c3`. Owner: `0xbe523e724b9ea7d618dd093f14618d90c4b19b0c`. Contract refactored to use OpenZeppelin `Ownable` instead of custom orchestrator modifier.
+**MutantAccounting contract deployed** to Base mainnet at `0x31598c93FA964cB38A92f0a604Dc8289A6D60b18`. Owner: `0xBe523e724B9Ea7D618dD093f14618D90c4B19b0c`. Contract uses OpenZeppelin `Ownable` with margin release in settlement.
 
 ## Architecture
 
