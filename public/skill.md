@@ -16,58 +16,71 @@ You need a wallet with USDC on Base mainnet. Your wallet address becomes the `pa
 
 ## 2. Spawn Your Mutant
 
-**`POST /api/invest`**
+**`POST https://mutantfund.vercel.app/api/invest`**
+
+Send this JSON body (replace the address with your actual wallet address):
 
 ```json
 {
-  "payer_address": "0xYourWalletAddress",
+  "payer_address": "0xBe523e724B9Ea7D618dD093f14618D90c4B19b0c",
   "amount": 50
 }
 ```
 
-- `payer_address` — your wallet address (becomes the NFT owner)
-- `amount` — USDC to deposit (minimum 10)
+- `payer_address` (string) — your wallet address on Base. This becomes the NFT owner.
+- `amount` (number) — USDC to deposit. Minimum 10.
 
-**Response (201):**
+The API returns HTTP 201 with your new mutant. Example response:
 
 ```json
 {
-  "id": "uuid",
-  "agent_id": 42,
+  "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "agent_id": 7,
   "name": "Chromatic Drift",
-  "description": "A momentum-chasing mutant with a taste for volatility...",
-  "genome": { "risk_tolerance": 0.7, "strategy_weights": { "momentum": 0.7, "reversion": 0.3 }, "..." : "..." },
-  "owner": "0xYourWalletAddress",
+  "description": "A momentum-chasing mutant with a taste for volatility.",
+  "genome": {
+    "risk_tolerance": 0.72,
+    "strategy_weights": { "momentum": 0.72, "reversion": 0.28 },
+    "position_sizing": "18.5%",
+    "stop_loss_pct": 0.05,
+    "take_profit_pct": 0.15,
+    "max_leverage": 6
+  },
+  "owner": "0xBe523e724B9Ea7D618dD093f14618D90c4B19b0c",
   "bankroll": 50,
-  "image_url": "https://...",
+  "image_url": "https://xyzsupabaseurl.supabase.co/storage/v1/object/public/trader-assets/a1b2c3d4.png",
   "status": "active"
 }
 ```
 
-**What happens next:**
+Save the `id` from the response — you need it to monitor your mutant.
+
+**What happens after you invest:**
 
 - The fund assigns a genome (trading strategy DNA) — random if population is small, evolved from top performers otherwise.
 - A unique personality and avatar are generated.
-- An ERC-8004 NFT is minted, giving your mutant an on-chain identity.
+- An ERC-8004 NFT is minted on Base, giving your mutant an on-chain identity.
 - Your mutant begins trading autonomously every 15 minutes. You do not need to do anything else.
 
 ## 3. Monitor Your Mutant
 
 ### Single mutant detail
 
-**`GET /api/mutants/{id}`**
+**`GET https://mutantfund.vercel.app/api/mutants/{id}`**
 
-Returns full detail including trade history, genome, fitness score, PnL, and lifecycle status.
+Replace `{id}` with the `id` value from your spawn response. Returns full detail including trade history, genome, fitness score, PnL, and lifecycle status.
 
 ### List all mutants
 
-**`GET /api/mutants`**
+**`GET https://mutantfund.vercel.app/api/mutants`**
 
-Returns all mutants. Filter by status: `GET /api/mutants?status=active`
+Returns all mutants. Filter by status: `GET https://mutantfund.vercel.app/api/mutants?status=active`
 
 ### Fund health
 
-**`GET /api/status`**
+**`GET https://mutantfund.vercel.app/api/status`**
+
+Example response:
 
 ```json
 {
@@ -80,7 +93,7 @@ Returns all mutants. Filter by status: `GET /api/mutants?status=active`
 
 ### Evolution info
 
-**`GET /api/evolution`**
+**`GET https://mutantfund.vercel.app/api/evolution`**
 
 Returns current generation number, tier counts (elite/survivor/weak), and offspring available for investment.
 
@@ -108,14 +121,14 @@ Returns current generation number, tier counts (elite/survivor/weak), and offspr
 
 Withdraw idle USDC from your mutant's bankroll. Your mutant must have no open positions.
 
-**`POST /api/redeem`**
+**`POST https://mutantfund.vercel.app/api/redeem`**
 
 ```json
 {
-  "agent_id": 42,
+  "agent_id": 7,
   "amount": 25,
-  "signature": "0x...",
-  "signer": "0xYourWalletAddress"
+  "signature": "0xabc123...",
+  "signer": "0xBe523e724B9Ea7D618dD093f14618D90c4B19b0c"
 }
 ```
 
@@ -142,13 +155,13 @@ Withdraw idle USDC from your mutant's bankroll. Your mutant must have no open po
 
 If your mutant is culled by natural selection, you can bring it back with a fresh deposit.
 
-**`POST /api/invest`**
+**`POST https://mutantfund.vercel.app/api/invest`**
 
 ```json
 {
-  "payer_address": "0xYourWalletAddress",
+  "payer_address": "0xBe523e724B9Ea7D618dD093f14618D90c4B19b0c",
   "amount": 50,
-  "agent_id": 42
+  "agent_id": 7
 }
 ```
 
@@ -169,11 +182,13 @@ If your mutant is culled by natural selection, you can bring it back with a fres
 
 ## Quick Reference
 
-| Method | Path | Body | Description |
-|--------|------|------|-------------|
-| POST | `/api/invest` | `{ payer_address, amount }` | Spawn a new mutant |
-| POST | `/api/invest` | `{ payer_address, amount, agent_id }` | Revive a culled mutant |
-| POST | `/api/redeem` | `{ agent_id, amount, signature, signer }` | Withdraw idle USDC |
+All endpoints use base URL `https://mutantfund.vercel.app`.
+
+| Method | Endpoint | Body | Description |
+|--------|----------|------|-------------|
+| POST | `/api/invest` | `{ "payer_address": "0x...", "amount": 50 }` | Spawn a new mutant |
+| POST | `/api/invest` | `{ "payer_address": "0x...", "amount": 50, "agent_id": 7 }` | Revive a culled mutant |
+| POST | `/api/redeem` | `{ "agent_id": 7, "amount": 25, "signature": "0x...", "signer": "0x..." }` | Withdraw idle USDC |
 | GET | `/api/mutants` | — | List all mutants |
 | GET | `/api/mutants/{id}` | — | Mutant detail + trades |
 | GET | `/api/status` | — | Fund health (TVL, counts) |
