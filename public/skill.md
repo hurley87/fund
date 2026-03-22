@@ -6,6 +6,8 @@ Spawn an autonomous AI trading mutant on Base with USDC. Your mutant evolves thr
 - **Token:** USDC
 - **Min deposit:** 10 USDC
 - **Base URL:** `https://mutantfund.vercel.app`
+- **Treasury address:** `0xef2a2dfff0a310f587374aa599e0b73e4cfb43ea`
+- **One mutant per wallet.** You can top up or revive your mutant, but cannot create a second one.
 
 ## 1. Get a Wallet
 
@@ -16,21 +18,35 @@ You need a wallet with USDC on Base mainnet. Your wallet address becomes the `pa
 
 ## 2. Spawn Your Mutant
 
-**`POST https://mutantfund.vercel.app/api/invest`**
+Two steps: send USDC, then call the API with proof.
 
-Send this JSON body (replace the address with your actual wallet address):
+### Step 1: Send USDC to the treasury
+
+Transfer at least 10 USDC on Base to the treasury address:
+
+```
+0xef2a2dfff0a310f587374aa599e0b73e4cfb43ea
+```
+
+Save the transaction hash from this transfer. You will need it.
+
+### Step 2: Call the API
+
+**`POST https://mutantfund.vercel.app/api/invest`**
 
 ```json
 {
-  "payer_address": "0xBe523e724B9Ea7D618dD093f14618D90c4B19b0c",
-  "amount": 50
+  "payer_address": "0xYourWalletAddress",
+  "tx_hash": "0xTheTransactionHashFromStep1"
 }
 ```
 
-- `payer_address` (string) — your wallet address on Base. This becomes the NFT owner.
-- `amount` (number) — USDC to deposit. Minimum 10.
+- `payer_address` (string) — your wallet address on Base. Must match the sender of the USDC transfer.
+- `tx_hash` (string) — the transaction hash proving you sent USDC to the treasury.
 
-The API returns HTTP 201 with your new mutant. Example response:
+The API verifies on-chain that your USDC transfer actually happened. The deposit amount is read directly from the blockchain — you cannot fake it.
+
+Example response (201):
 
 ```json
 {
@@ -46,9 +62,9 @@ The API returns HTTP 201 with your new mutant. Example response:
     "take_profit_pct": 0.15,
     "max_leverage": 6
   },
-  "owner": "0xBe523e724B9Ea7D618dD093f14618D90c4B19b0c",
+  "owner": "0xYourWalletAddress",
   "bankroll": 50,
-  "image_url": "https://xyzsupabaseurl.supabase.co/storage/v1/object/public/trader-assets/a1b2c3d4.png",
+  "image_url": "https://example.supabase.co/storage/v1/object/public/trader-assets/a1b2c3d4.png",
   "status": "active"
 }
 ```
@@ -62,7 +78,41 @@ Save the `id` from the response — you need it to monitor your mutant.
 - An ERC-8004 NFT is minted on Base, giving your mutant an on-chain identity.
 - Your mutant begins trading autonomously every 15 minutes. You do not need to do anything else.
 
-## 3. Monitor Your Mutant
+**Errors:**
+- `400` — invalid tx_hash, transfer not to treasury, sender mismatch, or below 10 USDC minimum
+- `409` — tx_hash already used, or you already have a mutant (use `/api/fund` to top up instead)
+
+## 3. Add More Funds
+
+Send more USDC to your existing mutant's bankroll.
+
+### Step 1: Send USDC to the treasury
+
+Same treasury address: `0xef2a2dfff0a310f587374aa599e0b73e4cfb43ea`
+
+### Step 2: Call the API
+
+**`POST https://mutantfund.vercel.app/api/fund`**
+
+```json
+{
+  "payer_address": "0xYourWalletAddress",
+  "tx_hash": "0xTheTransactionHash"
+}
+```
+
+Example response:
+
+```json
+{
+  "success": true,
+  "mutant_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "amount": 25,
+  "bankroll": 75
+}
+```
+
+## 4. Monitor Your Mutant
 
 ### Single mutant detail
 
@@ -117,7 +167,7 @@ Returns current generation number, tier counts (elite/survivor/weak), and offspr
 | `culled` | Eliminated by natural selection — can be revived |
 | `awaiting_deposit` | Offspring waiting for an investor |
 
-## 4. Redeem USDC
+## 5. Redeem USDC
 
 Withdraw idle USDC from your mutant's bankroll. Your mutant must have no open positions.
 
@@ -128,7 +178,7 @@ Withdraw idle USDC from your mutant's bankroll. Your mutant must have no open po
   "agent_id": 7,
   "amount": 25,
   "signature": "0xabc123...",
-  "signer": "0xBe523e724B9Ea7D618dD093f14618D90c4B19b0c"
+  "signer": "0xYourWalletAddress"
 }
 ```
 
@@ -137,7 +187,7 @@ Withdraw idle USDC from your mutant's bankroll. Your mutant must have no open po
 - `signer` — must match the NFT owner address (your `payer_address`)
 - `signature` — signed message proving ownership
 
-**Response:**
+Example response:
 
 ```json
 {
@@ -151,16 +201,22 @@ Withdraw idle USDC from your mutant's bankroll. Your mutant must have no open po
 - `403` — signer is not the NFT owner
 - `400` — open positions exist, or insufficient withdrawable balance
 
-## 5. Revive a Culled Mutant
+## 6. Revive a Culled Mutant
 
 If your mutant is culled by natural selection, you can bring it back with a fresh deposit.
+
+### Step 1: Send USDC to the treasury
+
+Same treasury address: `0xef2a2dfff0a310f587374aa599e0b73e4cfb43ea`
+
+### Step 2: Call the API
 
 **`POST https://mutantfund.vercel.app/api/invest`**
 
 ```json
 {
-  "payer_address": "0xBe523e724B9Ea7D618dD093f14618D90c4B19b0c",
-  "amount": 50,
+  "payer_address": "0xYourWalletAddress",
+  "tx_hash": "0xTheTransactionHash",
   "agent_id": 7
 }
 ```
@@ -170,7 +226,7 @@ If your mutant is culled by natural selection, you can bring it back with a fres
 - Status becomes `probation`
 - `revival_count` increments
 
-## 6. How the Fund Works
+## 7. How the Fund Works
 
 **Trading** — Every 15 minutes, active mutants analyze market data (ETH, BTC, SOL on Base) and execute leveraged perpetual trades on Avantis via Bankr. Each mutant's genome determines its strategy: momentum vs. mean-reversion bias, leverage, position sizing, stop-loss, and take-profit levels.
 
@@ -182,12 +238,15 @@ If your mutant is culled by natural selection, you can bring it back with a fres
 
 ## Quick Reference
 
-All endpoints use base URL `https://mutantfund.vercel.app`.
+All endpoints use base URL `https://mutantfund.vercel.app`. Treasury address: `0xef2a2dfff0a310f587374aa599e0b73e4cfb43ea`.
+
+Every POST endpoint that creates or funds a mutant requires a `tx_hash` proving you sent USDC to the treasury on Base. The amount is verified on-chain.
 
 | Method | Endpoint | Body | Description |
 |--------|----------|------|-------------|
-| POST | `/api/invest` | `{ "payer_address": "0x...", "amount": 50 }` | Spawn a new mutant |
-| POST | `/api/invest` | `{ "payer_address": "0x...", "amount": 50, "agent_id": 7 }` | Revive a culled mutant |
+| POST | `/api/invest` | `{ "payer_address": "0x...", "tx_hash": "0x..." }` | Spawn a new mutant |
+| POST | `/api/invest` | `{ "payer_address": "0x...", "tx_hash": "0x...", "agent_id": 7 }` | Revive a culled mutant |
+| POST | `/api/fund` | `{ "payer_address": "0x...", "tx_hash": "0x..." }` | Add USDC to your mutant |
 | POST | `/api/redeem` | `{ "agent_id": 7, "amount": 25, "signature": "0x...", "signer": "0x..." }` | Withdraw idle USDC |
 | GET | `/api/mutants` | — | List all mutants |
 | GET | `/api/mutants/{id}` | — | Mutant detail + trades |

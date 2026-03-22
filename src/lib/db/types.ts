@@ -73,6 +73,18 @@ export interface EvolutionLog {
   created_at: string;
 }
 
+export type DepositType = 'spawn' | 'topup' | 'revival';
+
+export interface Deposit {
+  id: string;
+  mutant_id: string;
+  tx_hash: string;
+  from_address: string;
+  amount: number;
+  type: DepositType;
+  created_at: string;
+}
+
 export interface TxQueueItem {
   id: string;
   type: string | null;

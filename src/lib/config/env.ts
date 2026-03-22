@@ -38,4 +38,7 @@ export const env = {
       '0x8004A169FB4a3325136EB29fA0ceB6D2e539a432'
     )!;
   },
+  get treasuryAddress() {
+    return required('TREASURY_ADDRESS');
+  },
 } as const;

@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { mutants } from '@/lib/db/supabase';
+import { mutants, deposits } from '@/lib/db/supabase';
 import { randomGenome } from '@/lib/evolution/genome';
 import { crossover } from '@/lib/evolution/crossover';
 import { mutate } from '@/lib/evolution/mutation';
@@ -9,47 +9,31 @@ import {
   uploadImage,
 } from '@/lib/personality/generate';
 import { enqueue } from '@/lib/queue/tx-queue';
+import { verifyUsdcTransfer } from '@/lib/verify/usdc-transfer';
 import type { Genome as EvolutionGenome } from '@/lib/evolution/genome';
 
-// ---------------------------------------------------------------------------
-// Minimum population before crossover kicks in
-// ---------------------------------------------------------------------------
 const CROSSOVER_THRESHOLD = 6;
-
-// Minimum USDC deposit
 const MIN_DEPOSIT = 10;
 
-// ---------------------------------------------------------------------------
-// Request body shape
-// ---------------------------------------------------------------------------
 interface InvestBody {
   payer_address: string;
-  amount: number;
+  tx_hash: string;
   /** If provided, attempt to revive a culled mutant instead of spawning new */
   agent_id?: number;
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/** Extract the raw evolution genome from a DB genome object. */
 function extractEvolutionGenome(dbGenome: unknown): EvolutionGenome {
   const g = dbGenome as Record<string, unknown>;
-  // Prefer the _raw field if present (written by toDbGenome)
   if (g._raw && typeof g._raw === 'object') {
     return g._raw as EvolutionGenome;
   }
-  // Fallback: generate a fresh random genome (shouldn't happen in practice)
   return randomGenome();
 }
 
-/** Pick two parents from the active pool, weighted toward higher fitness. */
 function pickParents(active: { id: string; genome: unknown; fitness: number }[]): [EvolutionGenome, EvolutionGenome, string[]] {
-  // Sort descending by fitness and pick top two distinct
   const sorted = [...active].sort((a, b) => b.fitness - a.fitness);
   const parent1 = sorted[0];
-  const parent2 = sorted[1] ?? sorted[0]; // fallback if only one
+  const parent2 = sorted[1] ?? sorted[0];
   return [
     extractEvolutionGenome(parent1.genome),
     extractEvolutionGenome(parent2.genome),
@@ -57,10 +41,6 @@ function pickParents(active: { id: string; genome: unknown; fitness: number }[])
   ];
 }
 
-/**
- * Convert the compact evolution genome into the DB genome shape.
- * The DB Genome has more fields; we map what we can and default the rest.
- */
 function toDbGenome(g: EvolutionGenome): Record<string, unknown> {
   return {
     risk_tolerance: g.signal_bias,
@@ -71,45 +51,60 @@ function toDbGenome(g: EvolutionGenome): Record<string, unknown> {
     stop_loss_pct: g.stop_loss,
     take_profit_pct: g.take_profit,
     max_leverage: g.leverage,
-    // Preserve raw evolution genes for crossover/mutation
     _raw: { ...g },
   };
 }
 
-// ---------------------------------------------------------------------------
-// POST /api/invest
-// ---------------------------------------------------------------------------
 export async function POST(request: Request) {
-  // 1. Parse body — MVP accepts JSON; real x402 payment header is a stretch goal
   let body: InvestBody;
   try {
     body = (await request.json()) as InvestBody;
   } catch {
-    return NextResponse.json(
-      { error: 'Invalid JSON body' },
-      { status: 400 },
-    );
+    return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
 
-  const { payer_address, amount, agent_id: reviveAgentId } = body;
+  const { payer_address, tx_hash, agent_id: reviveAgentId } = body;
 
-  // Basic validation
   if (!payer_address || typeof payer_address !== 'string') {
-    return NextResponse.json(
-      { error: 'payer_address is required' },
-      { status: 400 },
-    );
+    return NextResponse.json({ error: 'payer_address is required' }, { status: 400 });
   }
-  if (!amount || typeof amount !== 'number' || amount < MIN_DEPOSIT) {
-    return NextResponse.json(
-      { error: `amount must be at least ${MIN_DEPOSIT} USDC` },
-      { status: 402, headers: { 'X-Payment-Required': `min_amount=${MIN_DEPOSIT}` } },
-    );
+  if (!tx_hash || typeof tx_hash !== 'string') {
+    return NextResponse.json({ error: 'tx_hash is required' }, { status: 400 });
   }
+
+  const payer = payer_address.toLowerCase();
 
   try {
+    // 1. Check replay — has this tx_hash been used before?
+    const existingDeposit = await deposits.getByTxHash(tx_hash);
+    if (existingDeposit) {
+      return NextResponse.json(
+        { error: 'This transaction has already been used for a deposit' },
+        { status: 409 },
+      );
+    }
+
+    // 2. Verify USDC transfer on-chain
+    let amount: number;
+    try {
+      const transfer = await verifyUsdcTransfer(tx_hash, payer_address);
+      amount = transfer.amount;
+    } catch (err) {
+      return NextResponse.json(
+        { error: `Payment verification failed: ${err instanceof Error ? err.message : String(err)}` },
+        { status: 400 },
+      );
+    }
+
+    if (amount < MIN_DEPOSIT) {
+      return NextResponse.json(
+        { error: `Minimum deposit is ${MIN_DEPOSIT} USDC. Transfer was ${amount} USDC.` },
+        { status: 400 },
+      );
+    }
+
     // -----------------------------------------------------------------
-    // REVIVAL PATH — reactivate a culled mutant
+    // REVIVAL PATH
     // -----------------------------------------------------------------
     if (reviveAgentId != null) {
       const existing = await mutants.getByAgentId(reviveAgentId);
@@ -126,17 +121,18 @@ export async function POST(request: Request) {
           { status: 409 },
         );
       }
+      if (existing.owner_address !== payer) {
+        return NextResponse.json(
+          { error: 'You can only revive your own mutant' },
+          { status: 403 },
+        );
+      }
 
-      // Generate fresh genome for the revived mutant
       const genome = mutate(randomGenome());
       const dbGenome = toDbGenome(genome);
-
-      // Generate new personality
       const personality = await generatePersonality(genome);
 
-      // Update the existing row
       const revived = await mutants.update(existing.id, {
-        owner_address: payer_address,
         genome: dbGenome as unknown as import('@/lib/db/types').Genome,
         name: personality.name,
         description: personality.description,
@@ -155,21 +151,28 @@ export async function POST(request: Request) {
         last_signal_status: null,
       });
 
-      // Generate and upload new image
+      // Parallel: record deposit + generate image (independent)
       let image_url = revived.image_url;
-      try {
-        const imageBuffer = await generateImage(personality.image_prompt);
-        image_url = await uploadImage(revived.id, imageBuffer);
+      const [, imgResult] = await Promise.allSettled([
+        deposits.insert({
+          mutant_id: revived.id,
+          tx_hash,
+          from_address: payer,
+          amount,
+          type: 'revival',
+        }),
+        generateImage(personality.image_prompt)
+          .then((buf) => uploadImage(revived.id, buf)),
+      ]);
+
+      if (imgResult.status === 'fulfilled') {
+        image_url = imgResult.value;
         await mutants.update(revived.id, { image_url });
-      } catch (imgErr) {
-        console.error('[invest/revive] Image generation failed, continuing:', imgErr);
+      } else {
+        console.error('[invest/revive] Image generation failed, continuing:', imgResult.reason);
       }
 
-      // Queue onchain deposit recording
-      await enqueue('record_deposit', {
-        agentId: reviveAgentId,
-        amount,
-      });
+      await enqueue('record_deposit', { agentId: reviveAgentId, amount });
 
       return NextResponse.json(
         {
@@ -189,10 +192,23 @@ export async function POST(request: Request) {
     }
 
     // -----------------------------------------------------------------
-    // SPAWN PATH — create a brand-new mutant
+    // SPAWN PATH
     // -----------------------------------------------------------------
 
-    // 3. Generate genome
+    // One mutant per wallet
+    const existingMutant = await mutants.getByOwner(payer_address);
+    if (existingMutant) {
+      return NextResponse.json(
+        {
+          error: 'You already have a mutant. Use POST /api/fund to add more USDC, or POST /api/invest with agent_id to revive a culled mutant.',
+          mutant_id: existingMutant.id,
+          agent_id: existingMutant.agent_id,
+        },
+        { status: 409 },
+      );
+    }
+
+    // Generate genome
     const active = await mutants.listActive();
     let genome: EvolutionGenome;
     let parentIds: string[] | null = null;
@@ -206,13 +222,10 @@ export async function POST(request: Request) {
     }
 
     const dbGenome = toDbGenome(genome);
-
-    // 4. Generate personality
     const personality = await generatePersonality(genome);
 
-    // 5. Insert mutant row with placeholder image
     const mutant = await mutants.insert({
-      owner_address: payer_address,
+      owner_address: payer,
       genome: dbGenome as unknown as import('@/lib/db/types').Genome,
       name: personality.name,
       description: personality.description,
@@ -233,26 +246,32 @@ export async function POST(request: Request) {
       correlation_score: 0,
     });
 
-    // 6. Generate image, upload, update row
+    // Parallel: record deposit + generate image (independent)
     let image_url: string | null = null;
-    try {
-      const imageBuffer = await generateImage(personality.image_prompt);
-      image_url = await uploadImage(mutant.id, imageBuffer);
+    const [, imageResult] = await Promise.allSettled([
+      deposits.insert({
+        mutant_id: mutant.id,
+        tx_hash,
+        from_address: payer,
+        amount,
+        type: 'spawn',
+      }),
+      generateImage(personality.image_prompt)
+        .then((buf) => uploadImage(mutant.id, buf)),
+    ]);
+
+    if (imageResult.status === 'fulfilled') {
+      image_url = imageResult.value;
       await mutants.update(mutant.id, { image_url });
-    } catch (imgErr) {
-      console.error('[invest] Image generation failed, continuing without image:', imgErr);
+    } else {
+      console.error('[invest] Image generation failed, continuing without image:', imageResult.reason);
     }
 
-    // 7. Queue onchain transactions
-    await enqueue('register', {
-      agentURI: `/api/mutants/${mutant.id}/registration.json`,
-    });
-    await enqueue('record_deposit', {
-      agentId: mutant.id,
-      amount,
-    });
+    await Promise.all([
+      enqueue('register', { agentURI: `/api/mutants/${mutant.id}/registration.json` }),
+      enqueue('record_deposit', { agentId: mutant.id, amount }),
+    ]);
 
-    // 8. Return response
     return NextResponse.json(
       {
         id: mutant.id,
@@ -270,7 +289,7 @@ export async function POST(request: Request) {
   } catch (err) {
     console.error('[invest] Unhandled error:', err);
     return NextResponse.json(
-      { error: 'Internal server error', detail: err instanceof Error ? err.message : String(err) },
+      { error: 'Internal server error' },
       { status: 500 },
     );
   }

@@ -1,6 +1,6 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { env } from '@/lib/config/env';
-import type { Mutant, Trade, EvolutionLog, TxQueueItem } from './types';
+import type { Mutant, Trade, EvolutionLog, TxQueueItem, Deposit } from './types';
 
 let _client: SupabaseClient | null = null;
 
@@ -78,6 +78,16 @@ export const mutants = {
     if (error) throw error;
     return data as Mutant[];
   },
+
+  async getByOwner(ownerAddress: string) {
+    const { data, error } = await getSupabase()
+      .from('mutants')
+      .select('*')
+      .eq('owner_address', ownerAddress.toLowerCase())
+      .maybeSingle();
+    if (error) throw error;
+    return data as Mutant | null;
+  },
 };
 
 export const trades = {
@@ -121,6 +131,28 @@ export const evolutionLogs = {
       .single();
     if (error) throw error;
     return data as EvolutionLog;
+  },
+};
+
+export const deposits = {
+  async getByTxHash(txHash: string) {
+    const { data, error } = await getSupabase()
+      .from('deposits')
+      .select('*')
+      .eq('tx_hash', txHash.toLowerCase())
+      .maybeSingle();
+    if (error) throw error;
+    return data as Deposit | null;
+  },
+
+  async insert(deposit: Omit<Deposit, 'id' | 'created_at'>) {
+    const { data, error } = await getSupabase()
+      .from('deposits')
+      .insert({ ...deposit, tx_hash: deposit.tx_hash.toLowerCase() })
+      .select()
+      .single();
+    if (error) throw error;
+    return data as Deposit;
   },
 };
 
