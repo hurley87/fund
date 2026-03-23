@@ -9,7 +9,7 @@
   --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
-  --font-heading: var(--font-sans);
+  --font-heading: var(--font-space-grotesk);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -126,5 +126,91 @@
   }
   html {
     @apply font-sans;
+  }
+}
+
+@keyframes marquee {
+  0% { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+
+.animate-marquee {
+  animation: marquee 30s linear infinite;
+}
+
+@keyframes pulse-glow {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 oklch(0.85 0.2 145 / 35%);
+  }
+  50% {
+    box-shadow: 0 0 24px 2px oklch(0.85 0.2 145 / 25%);
+  }
+}
+
+@keyframes dna-float {
+  0%,
+  100% {
+    transform: translateY(0) rotate(0deg);
+  }
+  50% {
+    transform: translateY(-6px) rotate(1deg);
+  }
+}
+
+.animate-pulse-glow {
+  animation: pulse-glow 3s ease-in-out infinite;
+}
+
+.animate-dna-float {
+  animation: dna-float 6s ease-in-out infinite;
+}
+
+@layer utilities {
+  .font-heading {
+    font-family: var(--font-heading), ui-sans-serif, system-ui, sans-serif;
+  }
+
+  .text-gradient-brand {
+    background: linear-gradient(
+      135deg,
+      oklch(0.92 0.18 145) 0%,
+      oklch(0.78 0.2 150) 45%,
+      oklch(0.72 0.16 160) 100%
+    );
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  .glass-panel {
+    background: oklch(0.205 0 0 / 55%);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid oklch(1 0 0 / 10%);
+  }
+
+  .glass-panel-strong {
+    background: oklch(0.18 0 0 / 70%);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid oklch(1 0 0 / 12%);
+  }
+
+  .hero-glow {
+    background: radial-gradient(
+      ellipse 80% 60% at 50% 0%,
+      oklch(0.55 0.18 145 / 22%) 0%,
+      oklch(0.35 0.12 150 / 8%) 40%,
+      transparent 70%
+    );
+  }
+
+  .section-pattern {
+    background-image: radial-gradient(
+      oklch(1 0 0 / 4%) 1px,
+      transparent 1px
+    );
+    background-size: 24px 24px;
   }
 }

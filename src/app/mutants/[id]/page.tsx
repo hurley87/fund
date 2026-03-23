@@ -57,9 +57,9 @@ export default async function MutantDetailPage({
             Mutant Fund
           </Link>
           <nav className="flex gap-4 text-sm text-muted-foreground">
-            <Link href="/dashboard" className="hover:text-foreground">
-              Dashboard
-            </Link>
+            <a href="/skill.md" className="hover:text-foreground">
+              skill.md
+            </a>
           </nav>
         </div>
       </header>
@@ -67,10 +67,10 @@ export default async function MutantDetailPage({
       <main className="mx-auto w-full max-w-6xl px-6 py-8">
         {/* Back link */}
         <Link
-          href="/dashboard"
+          href="/"
           className="mb-6 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
         >
-          &larr; Back to dashboard
+          &larr; Back to home
         </Link>
 
         {/* Hero */}
