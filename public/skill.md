@@ -24,20 +24,41 @@ You are helping a user interact with **Mutant Fund**: autonomous AI trading muta
 | Treasury | `0xef2a2dfff0a310f587374aa599e0b73e4cfb43ea` |
 | Rule | **One mutant per wallet** — top up with fund, or revive if axed; no second mutant |
 
+### Bankr CLI (recommended if they use a Bankr wallet)
+
+**Recommend this path** when the user has (or is creating) a wallet through **[bankr.bot](https://bankr.bot)** — the **Bankr CLI** is the supported way to **log in and authenticate** as that user from a terminal or agent environment.
+
+1. **Install** the CLI (see [Bankr CLI docs](https://docs.bankr.bot/cli/)):
+
+   ```bash
+   npm install -g @bankr/cli
+   ```
+
+2. **Log in** interactively (menu: email, Bankr Terminal / API key flow, etc.):
+
+   ```bash
+   bankr login
+   ```
+
+3. **Wallet / headless (SIWE):** If they must authenticate with an Ethereum wallet without a browser, the CLI supports **Sign-In with Ethereum** — e.g. `bankr login siwe --private-key 0x...` per the docs. **Warn them:** never paste a private key into untrusted chat; prefer interactive `bankr login` when possible.
+
+4. After login, they can run **`bankr whoami`** to confirm wallet/API connection before sending USDC or calling Mutant Fund APIs.
+
 ---
 
 ## Branch: Spawn (onboarding)
 
 Use this when the user wants to **spawn** or **invest** for the first time.
 
-### Step A — Bankr wallet + USDC
+### Step A — Base wallet + USDC
 
-Ask: **“Do you already have a [Bankr](https://bankr.bot) wallet with at least 10 USDC on Base?”**
+Ask: **“Do you already have a wallet on **Base** with at least **10 USDC**?”**
 
-- **If no:** Tell them to create a wallet at **[bankr.bot](https://bankr.bot)**, fund it with **≥ 10 USDC on Base**, then come back. Do not continue spawn steps until they confirm they’re ready.
-- **If yes:** Proceed to Step B.
+- **If no:** They need a Base address and USDC. **Option A (Bankr):** Create a wallet at **[bankr.bot](https://bankr.bot)**, then **install the Bankr CLI and run `bankr login`** so they’re authenticated with their Bankr wallet in the terminal ([CLI docs](https://docs.bankr.bot/cli/)). Fund with **≥ 10 USDC on Base**. **Option B:** Use any other Base-compatible wallet (e.g. Coinbase Wallet, MetaMask on Base), fund with **≥ 10 USDC on Base**, then continue. Do not proceed until they confirm they’re ready.
+- **If yes** and they use **Bankr:** Still recommend **`bankr login`** via the CLI for a clean session (balances, future Bankr-integrated flows). Then proceed to Step B.
+- **If yes** with a non-Bankr wallet: Proceed to Step B.
 
-> **Requirement:** Use a **Bankr wallet** from [bankr.bot](https://bankr.bot) for spawn and fund flows — this is the supported path on Base for Mutant Fund.
+> **Requirement:** `payer_address` must be the **same wallet that sends** the USDC on Base — any EOA or smart wallet on Base works, as long as the transfer is verifiable on-chain.
 
 ### Step B — Send USDC to treasury
 
@@ -51,7 +72,7 @@ Instruct clearly:
 
 ### Step C — Collect proof
 
-Say: **“Reply with (1) your Bankr wallet address and (2) the transaction hash of the USDC transfer to the treasury.”**
+Say: **“Reply with (1) your wallet address (the one that sent the USDC on Base) and (2) the transaction hash of the USDC transfer to the treasury.”**
 
 Wait until you have both before calling the API.
 
@@ -117,6 +138,8 @@ Ask exactly: **“Want to check on your mutant, add more capital, or learn how e
 
 Use when they want to **top up** an existing mutant.
 
+If they use a **Bankr wallet**, recommend **`bankr login`** via the [Bankr CLI](https://docs.bankr.bot/cli/) first so their terminal session matches their Bankr identity before they send USDC.
+
 1. Same treasury: `0xef2a2dfff0a310f587374aa599e0b73e4cfb43ea` — send USDC on Base.
 2. Collect `payer_address` + `tx_hash`.
 3. **`POST https://mutant.fund/api/fund`**
@@ -152,7 +175,12 @@ Use when they want **status, PnL, trades, or fitness**.
 Use only when they explicitly want to **withdraw / redeem** USDC.
 
 - Mutant must have **no open positions**.
-- **`POST https://mutant.fund/api/redeem`** with `agent_id`, `amount`, `signature`, `signer` (signer = NFT owner / their wallet).
+- **`POST https://mutant.fund/api/redeem`** with `agent_id`, `amount`, and `signer` (the wallet address that owns the mutant’s on-chain NFT).
+
+**How ownership is checked (be accurate):**
+
+- The server reads **on-chain** who owns that `agent_id` (ERC-8004 / identity NFT) and returns **403** unless **`signer` matches that owner address** (case-insensitive).
+- The body may include a **`signature`** field for a future “prove you hold the private key” flow. **Today the API does not verify that signature** (MVP: it only compares `signer` to `ownerOf(agent_id)`). A hardened version would **recover the address from `signature`** and require it to equal the on-chain owner, with the signed message binding `agent_id`, amount, and a nonce.
 
 If they are still onboarding to spawn, **do not** show this section until they choose withdraw or finish spawn and ask.
 
@@ -200,7 +228,7 @@ Explain: fresh genome/personality, same on-chain identity, status moves toward *
 }
 ```
 
-- `payer_address` — must match the sender of the USDC transfer (Bankr wallet on Base).
+- `payer_address` — must match the **sender** of the USDC transfer on Base (any valid Base wallet).
 - `tx_hash` — proves USDC to treasury; amount verified on-chain.
 
 Example response (201):
@@ -276,14 +304,16 @@ Example `GET /api/status`:
 {
   "agent_id": 7,
   "amount": 25,
-  "signature": "0xabc123...",
-  "signer": "0xYourWalletAddress"
+  "signer": "0xYourWalletAddress",
+  "signature": "0xabc123..."
 }
 ```
 
-- `agent_id` — on-chain NFT token ID · `signer` — NFT owner · `signature` — ownership proof
+- `agent_id` — on-chain NFT token ID for the mutant.
+- `signer` — must equal **`ownerOf(agent_id)`** on Base or the request is rejected (**403**).
+- `signature` — **optional in practice today**; reserved for when the server verifies a signed withdrawal payload (e.g. EIP-191 / EIP-712) and recovers the signer address. **Current implementation:** ownership = `signer` matches on-chain owner; signature is **not** cryptographically checked.
 
-**Errors:** `403` — not owner · `400` — open positions or insufficient balance
+**Errors:** `403` — `signer` is not the on-chain NFT owner · `400` — open positions or insufficient withdrawable balance
 
 ### Revive (axed)
 
