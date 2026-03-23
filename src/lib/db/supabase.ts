@@ -1,5 +1,6 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { env } from '@/lib/config/env';
+import { fetchWithRetry } from '@/lib/http/fetch-with-retry';
 import type { Mutant, Trade, EvolutionLog, TxQueueItem, Deposit } from './types';
 
 let _client: SupabaseClient | null = null;
@@ -9,6 +10,7 @@ export function getSupabase(): SupabaseClient {
   if (!_client) {
     _client = createClient(env.supabaseUrl, env.supabaseServiceRoleKey, {
       auth: { persistSession: false },
+      global: { fetch: fetchWithRetry },
     });
   }
   return _client;
