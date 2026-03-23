@@ -10,7 +10,7 @@ The user wants: deposit money, get exposure to many competing strategies that ad
 
 Mutant Fund is a decentralized autonomous hedge fund where AI trading agents evolve their strategies through natural selection. A user (human or agent) makes a single HTTP call with a USDC payment and receives a "mutant" — an AI trader with a unique genome, personality, name, and portrait, represented as an ERC-8004 NFT on Base.
 
-Each mutant trades autonomously on Base via Bankr/Avantis perps. Every 24 hours, an evolutionary engine evaluates the population: strong traders survive and breed, weak ones lose capital allocation and get culled. New offspring inherit traits from the best performers. The cycle repeats — Darwin meets DeFi.
+Each mutant trades autonomously on Base via Bankr/Avantis perps. Every 24 hours, an evolutionary engine evaluates the population: strong traders survive and breed, weak ones lose capital allocation and get axed. New offspring inherit traits from the best performers. The cycle repeats — Darwin meets DeFi.
 
 All accounting is recorded onchain via a public ledger contract. The NFT holder can redeem idle USDC at any time. The protocol takes 20% of realized profit above a high-water mark. No management fee. No guaranteed principal.
 
@@ -32,7 +32,7 @@ All accounting is recorded onchain via a public ledger contract. The NFT holder 
 14. As an **operator**, I want a transaction queue that serializes all onchain operations from the hot wallet, so that nonce collisions don't occur.
 15. As an **operator**, I want hardcoded risk guardrails (max 10x leverage, mandatory stop-loss, 20% drawdown halt, 30% max position size), so that no single mutant can blow up the fund.
 16. As an **NFT buyer** (secondary market), I want redemption rights to follow the NFT via `ownerOf` checks, so that if I buy a mutant NFT, I inherit its bankroll.
-17. As a **reviver**, I want to invest in a culled mutant to reactivate it with a new genome, so that promising NFT positions can get a second chance with fresh strategy.
+17. As a **reviver**, I want to invest in an axed mutant to reactivate it with a new genome, so that promising NFT positions can get a second chance with fresh strategy.
 
 ## Implementation Decisions
 
@@ -92,7 +92,7 @@ New Supabase tables: `mutants` (genome, bankroll, fitness, lifecycle, profile fi
 | `/api/evolution` | GET | Public | — | `{ generation, tier_counts, offspring_available, recent_mutations }` |
 | `/api/status` | GET | Public | — | `{ tvl, active_mutants, total_trades, last_evolution }` |
 | `/api/cron/orchestrator` | GET | CRON_SECRET | — | `{ evaluated, traded, settled }` |
-| `/api/cron/evolution` | GET | CRON_SECRET | — | `{ generation, elites, culled, offspring_created }` |
+| `/api/cron/evolution` | GET | CRON_SECRET | — | `{ generation, elites, axed, offspring_created }` |
 
 ## Testing Decisions
 

@@ -6,7 +6,9 @@ export function cn(...inputs: ClassValue[]) {
 }
 
 export function getBaseUrl(): string {
-  return process.env.NEXT_PUBLIC_SITE_URL ?? process.env.VERCEL_URL
-    ? `https://${process.env.VERCEL_URL}`
-    : "http://localhost:3000";
+  const site = process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/$/, "");
+  if (site) return site;
+  const vercelUrl = process.env.VERCEL_URL;
+  if (vercelUrl) return `https://${vercelUrl}`;
+  return "http://localhost:3000";
 }

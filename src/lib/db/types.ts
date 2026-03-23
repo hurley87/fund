@@ -1,4 +1,4 @@
-export type LifecycleStatus = 'active' | 'benched' | 'culled' | 'probation' | 'awaiting_deposit';
+export type LifecycleStatus = 'active' | 'benched' | 'axed' | 'probation' | 'awaiting_deposit';
 
 export interface Genome {
   signal_bias: number;
@@ -66,7 +66,7 @@ export interface EvolutionLog {
   elite_ids: string[] | null;
   survivor_ids: string[] | null;
   offspring_ids: string[] | null;
-  culled_ids: string[] | null;
+  axed_ids: string[] | null;
   tier_counts: Record<string, number> | null;
   mutations: Record<string, unknown> | null;
   avg_fitness: number | null;

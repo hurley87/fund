@@ -144,7 +144,7 @@ Served from `GET /api/mutants/[id]/registration.json`:
   "services": [
     {
       "name": "Mutant Fund API",
-      "endpoint": "https://mutantfund.vercel.app/api/mutants/42"
+      "endpoint": "https://mutant.fund/api/mutants/42"
     }
   ],
   "registrations": [
@@ -215,7 +215,7 @@ getHWM(uint256 agentId) → uint256
 
 ### Revival
 
-When a mutant is culled or bankroll depleted, anyone can invest in it again via `POST /api/invest` with the `agentId`. This reactivates the mutant with a **new genome** (not the old one). HWM resets to the new bankroll baseline. `revival_count` increments. Mutant enters `probation` status with capped `capital_allocation` for 1-2 evolution cycles.
+When a mutant is axed or bankroll depleted, anyone can invest in it again via `POST /api/invest` with the `agentId`. This reactivates the mutant with a **new genome** (not the old one). HWM resets to the new bankroll baseline. `revival_count` increments. Mutant enters `probation` status with capped `capital_allocation` for 1-2 evolution cycles.
 
 **Tooling:** Scaffold and deploy with **[LazerForge](https://github.com/LazerTechnologies/LazerForge)** (Foundry template). `forge init --template lazertechnologies/lazerforge contracts`, deploy via `forge script`.
 
@@ -264,7 +264,7 @@ else:
   → no_trade_signal
 ```
 
-The signal math is intentionally simple. **Natural selection is the edge** — bad parameter combos lose money, get culled. Good ones survive and breed.
+The signal math is intentionally simple. **Natural selection is the edge** — bad parameter combos lose money, get axed. Good ones survive and breed.
 
 ### DexScreener data (MVP market data policy)
 
@@ -355,9 +355,9 @@ Exact percentages are population-size aware (minimum 1 explorer).
 
 **Mutation:** ±10% random adjustments on offspring genes (clamped to allowed ranges).
 
-**Capital allocation and cull**
+**Capital allocation and axe**
 
-Prefer **reallocation before deletion**: weak mutants lose `capital_allocation` toward 0 (benched) while rows stay for audit. **Cull** when fitness stays poor across multiple windows. Set `lifecycle_status` to `culled`. Bankroll remains under the same NFT until redeemed or revived.
+Prefer **reallocation before deletion**: weak mutants lose `capital_allocation` toward 0 (benched) while rows stay for audit. **Axe** when fitness stays poor across multiple windows. Set `lifecycle_status` to `axed`. Bankroll remains under the same NFT until redeemed or revived.
 
 **Offspring are born without capital.** They appear in `GET /api/mutants` with `lifecycle_status: 'awaiting_deposit'`. Their lineage and parent fitness are visible. The market decides which offspring deserve capital — agents or humans invest to activate them.
 
@@ -367,7 +367,7 @@ Prefer **reallocation before deletion**: weak mutants lose `capital_allocation` 
 |---|---|
 | `active` | Eligible for trading and evolution |
 | `benched` | `capital_allocation = 0`; retained for audit; skipped by trading loop |
-| `culled` | Not eligible to trade until revived |
+| `axed` | Not eligible to trade until revived |
 | `probation` | Revived mutant; capped sizing, no breeding for 1-2 generations |
 | `awaiting_deposit` | Offspring genome exists but no bankroll; waiting for investment |
 
@@ -377,7 +377,7 @@ Prefer **reallocation before deletion**: weak mutants lose `capital_allocation` 
 
 **P0 — Agent Interface (skill.md + x402 API)**
 
-- `skill.md` hosted at `mutantfund.vercel.app/skill.md`
+- `skill.md` hosted at `https://mutant.fund/skill.md`
 - Describes fund mechanics, API endpoints, prerequisites (wallet with USDC on Base), and how to invest
 
 | Endpoint | Method | Purpose |
@@ -452,7 +452,7 @@ create table mutants (
   capital_allocation numeric default 1.0 check (capital_allocation >= 0),
   generation integer default 0,
   parent_ids uuid[],                  -- lineage (breeding)
-  lifecycle_status text default 'active',  -- active, benched, culled, probation, awaiting_deposit
+  lifecycle_status text default 'active',  -- active, benched, axed, probation, awaiting_deposit
   trades_today integer default 0,
   last_trade_at timestamptz,
   last_evaluated_at timestamptz,
@@ -489,7 +489,7 @@ create table evolution_logs (
   elite_ids uuid[],
   survivor_ids uuid[],
   offspring_ids uuid[],
-  culled_ids uuid[],
+  axed_ids uuid[],
   tier_counts jsonb,
   mutations jsonb,
   avg_fitness float,
@@ -698,7 +698,7 @@ mutant-fund/
 
 ## Verification Checklist
 
-1. Visit `mutantfund.vercel.app/skill.md` — agents can read it
+1. Visit `https://mutant.fund/skill.md` — agents can read it
 2. Call `POST /api/invest` with x402 — receive a mutant with unique name, image, genome
 3. Call `GET /api/mutants` — returns live population
 4. Verify ERC-8004 NFTs on Base via IdentityRegistry
@@ -718,7 +718,7 @@ mutant-fund/
 >
 > Pay USDC → receive a Mutant — an ERC-8004 AI agent with unique trading traits, a name, and a face. Your USDC backs that mutant's bankroll; every dollar is accounted onchain. When the strategy realizes profit, the protocol takes 20% above a high-water mark — then you (the current NFT holder) can redeem idle USDC.
 >
-> Your mutant joins a population of competing strategies on Base. Every day, tiered selection reshapes the roster: elites hold ground, survivors keep trading, and the system breeds new offspring from the best. The weak lose budget, then get culled. New mutants are born from evolution — waiting for someone to believe in their lineage and fund them.
+> Your mutant joins a population of competing strategies on Base. Every day, tiered selection reshapes the roster: elites hold ground, survivors keep trading, and the system breeds new offspring from the best. The weak lose budget, then get axed. New mutants are born from evolution — waiting for someone to believe in their lineage and fund them.
 >
 > No single strategy to blow up. No black box. Every trade, mutation, and dollar movement logged onchain. Darwin meets DeFi.
 >

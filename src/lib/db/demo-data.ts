@@ -163,7 +163,7 @@ export const DEMO_MUTANTS: Mutant[] = [
     agent_id: 5,
     owner_address: "0xAbC1230000000000000000000000000000000005",
     name: "Wraith",
-    description: "Once promising, now culled. A cautionary tale of over-leveraged ambition.",
+    description: "Once promising, now axed. A cautionary tale of over-leveraged ambition.",
     image_url: null,
     image_prompt: null,
     genome: {
@@ -184,7 +184,7 @@ export const DEMO_MUTANTS: Mutant[] = [
     capital_allocation: 0,
     generation: 0,
     parent_ids: null,
-    lifecycle_status: "culled",
+    lifecycle_status: "axed",
     trades_today: 0,
     last_trade_at: "2026-03-19T22:00:00Z",
     last_evaluated_at: "2026-03-20T00:00:00Z",

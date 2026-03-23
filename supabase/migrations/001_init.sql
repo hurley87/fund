@@ -52,7 +52,7 @@ create table evolution_logs (
   elite_ids uuid[],
   survivor_ids uuid[],
   offspring_ids uuid[],
-  culled_ids uuid[],
+  axed_ids uuid[],
   tier_counts jsonb,
   mutations jsonb,
   avg_fitness float,

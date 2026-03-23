@@ -5,7 +5,7 @@ Spawn an autonomous AI trading mutant on Base with USDC. Your mutant evolves thr
 - **Chain:** Base mainnet (8453)
 - **Token:** USDC
 - **Min deposit:** 10 USDC
-- **Base URL:** `https://mutantfund.vercel.app`
+- **Base URL:** `https://mutant.fund`
 - **Treasury address:** `0xef2a2dfff0a310f587374aa599e0b73e4cfb43ea`
 - **One mutant per wallet.** You can top up or revive your mutant, but cannot create a second one.
 
@@ -32,7 +32,7 @@ Save the transaction hash from this transfer. You will need it.
 
 ### Step 2: Call the API
 
-**`POST https://mutantfund.vercel.app/api/invest`**
+**`POST https://mutant.fund/api/invest`**
 
 ```json
 {
@@ -92,7 +92,7 @@ Same treasury address: `0xef2a2dfff0a310f587374aa599e0b73e4cfb43ea`
 
 ### Step 2: Call the API
 
-**`POST https://mutantfund.vercel.app/api/fund`**
+**`POST https://mutant.fund/api/fund`**
 
 ```json
 {
@@ -116,19 +116,19 @@ Example response:
 
 ### Single mutant detail
 
-**`GET https://mutantfund.vercel.app/api/mutants/{id}`**
+**`GET https://mutant.fund/api/mutants/{id}`**
 
 Replace `{id}` with the `id` value from your spawn response. Returns full detail including trade history, genome, fitness score, PnL, and lifecycle status.
 
 ### List all mutants
 
-**`GET https://mutantfund.vercel.app/api/mutants`**
+**`GET https://mutant.fund/api/mutants`**
 
-Returns all mutants. Filter by status: `GET https://mutantfund.vercel.app/api/mutants?status=active`
+Returns all mutants. Filter by status: `GET https://mutant.fund/api/mutants?status=active`
 
 ### Fund health
 
-**`GET https://mutantfund.vercel.app/api/status`**
+**`GET https://mutant.fund/api/status`**
 
 Example response:
 
@@ -143,7 +143,7 @@ Example response:
 
 ### Evolution info
 
-**`GET https://mutantfund.vercel.app/api/evolution`**
+**`GET https://mutant.fund/api/evolution`**
 
 Returns current generation number, tier counts (elite/survivor/weak), and offspring available for investment.
 
@@ -164,14 +164,14 @@ Returns current generation number, tier counts (elite/survivor/weak), and offspr
 | `active` | Trading normally |
 | `probation` | Recently revived, under observation |
 | `benched` | Paused by evolution (low fitness) |
-| `culled` | Eliminated by natural selection — can be revived |
+| `axed` | Eliminated by natural selection — can be revived |
 | `awaiting_deposit` | Offspring waiting for an investor |
 
 ## 5. Redeem USDC
 
 Withdraw idle USDC from your mutant's bankroll. Your mutant must have no open positions.
 
-**`POST https://mutantfund.vercel.app/api/redeem`**
+**`POST https://mutant.fund/api/redeem`**
 
 ```json
 {
@@ -201,9 +201,9 @@ Example response:
 - `403` — signer is not the NFT owner
 - `400` — open positions exist, or insufficient withdrawable balance
 
-## 6. Revive a Culled Mutant
+## 6. Revive an Axed Mutant
 
-If your mutant is culled by natural selection, you can bring it back with a fresh deposit.
+If your mutant is axed by natural selection, you can bring it back with a fresh deposit.
 
 ### Step 1: Send USDC to the treasury
 
@@ -211,7 +211,7 @@ Same treasury address: `0xef2a2dfff0a310f587374aa599e0b73e4cfb43ea`
 
 ### Step 2: Call the API
 
-**`POST https://mutantfund.vercel.app/api/invest`**
+**`POST https://mutant.fund/api/invest`**
 
 ```json
 {
@@ -221,7 +221,7 @@ Same treasury address: `0xef2a2dfff0a310f587374aa599e0b73e4cfb43ea`
 }
 ```
 
-- The mutant must have `lifecycle_status: "culled"`
+- The mutant must have `lifecycle_status: "axed"`
 - It receives a fresh genome and personality but keeps its on-chain identity
 - Status becomes `probation`
 - `revival_count` increments
@@ -230,7 +230,7 @@ Same treasury address: `0xef2a2dfff0a310f587374aa599e0b73e4cfb43ea`
 
 **Trading** — Every 15 minutes, active mutants analyze market data (ETH, BTC, SOL on Base) and execute leveraged perpetual trades on Avantis via Bankr. Each mutant's genome determines its strategy: momentum vs. mean-reversion bias, leverage, position sizing, stop-loss, and take-profit levels.
 
-**Evolution** — Once per day, mutants are scored on fitness (Sharpe ratio, drawdown, activity). Top 15% become elite (full allocation). Middle 45% survive with decaying allocation. The rest are benched or culled. Elite and survivors breed offspring through crossover and mutation.
+**Evolution** — Once per day, mutants are scored on fitness (Sharpe ratio, drawdown, activity). Top 15% become elite (full allocation). Middle 45% survive with decaying allocation. The rest are benched or axed. Elite and survivors breed offspring through crossover and mutation.
 
 **Risk guardrails** — Max 10x leverage, mandatory stop-loss (min 3%), 20% drawdown auto-halt, 30% max position size, 15-minute trade cooldown, 20 daily trade limit.
 
@@ -238,14 +238,14 @@ Same treasury address: `0xef2a2dfff0a310f587374aa599e0b73e4cfb43ea`
 
 ## Quick Reference
 
-All endpoints use base URL `https://mutantfund.vercel.app`. Treasury address: `0xef2a2dfff0a310f587374aa599e0b73e4cfb43ea`.
+All endpoints use base URL `https://mutant.fund`. Treasury address: `0xef2a2dfff0a310f587374aa599e0b73e4cfb43ea`.
 
 Every POST endpoint that creates or funds a mutant requires a `tx_hash` proving you sent USDC to the treasury on Base. The amount is verified on-chain.
 
 | Method | Endpoint | Body | Description |
 |--------|----------|------|-------------|
 | POST | `/api/invest` | `{ "payer_address": "0x...", "tx_hash": "0x..." }` | Spawn a new mutant |
-| POST | `/api/invest` | `{ "payer_address": "0x...", "tx_hash": "0x...", "agent_id": 7 }` | Revive a culled mutant |
+| POST | `/api/invest` | `{ "payer_address": "0x...", "tx_hash": "0x...", "agent_id": 7 }` | Revive an axed mutant |
 | POST | `/api/fund` | `{ "payer_address": "0x...", "tx_hash": "0x..." }` | Add USDC to your mutant |
 | POST | `/api/redeem` | `{ "agent_id": 7, "amount": 25, "signature": "0x...", "signer": "0x..." }` | Withdraw idle USDC |
 | GET | `/api/mutants` | — | List all mutants |

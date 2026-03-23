@@ -18,7 +18,7 @@ const MIN_DEPOSIT = 10;
 interface InvestBody {
   payer_address: string;
   tx_hash: string;
-  /** If provided, attempt to revive a culled mutant instead of spawning new */
+  /** If provided, attempt to revive an axed mutant instead of spawning new */
   agent_id?: number;
 }
 
@@ -115,9 +115,9 @@ export async function POST(request: Request) {
           { status: 404 },
         );
       }
-      if (existing.lifecycle_status !== 'culled') {
+      if (existing.lifecycle_status !== 'axed') {
         return NextResponse.json(
-          { error: `Mutant ${reviveAgentId} is not culled (status: ${existing.lifecycle_status})` },
+          { error: `Mutant ${reviveAgentId} is not axed (status: ${existing.lifecycle_status})` },
           { status: 409 },
         );
       }
@@ -172,7 +172,7 @@ export async function POST(request: Request) {
         console.error('[invest/revive] Image generation failed, continuing:', imgResult.reason);
       }
 
-      await enqueue('record_deposit', { agentId: reviveAgentId, amount });
+      await enqueue('record_deposit', { agentId: String(reviveAgentId), amount });
 
       return NextResponse.json(
         {
@@ -200,7 +200,7 @@ export async function POST(request: Request) {
     if (existingMutant) {
       return NextResponse.json(
         {
-          error: 'You already have a mutant. Use POST /api/fund to add more USDC, or POST /api/invest with agent_id to revive a culled mutant.',
+          error: 'You already have a mutant. Use POST /api/fund to add more USDC, or POST /api/invest with agent_id to revive an axed mutant.',
           mutant_id: existingMutant.id,
           agent_id: existingMutant.agent_id,
         },
@@ -267,10 +267,8 @@ export async function POST(request: Request) {
       console.error('[invest] Image generation failed, continuing without image:', imageResult.reason);
     }
 
-    await Promise.all([
-      enqueue('register', { agentURI: `/api/mutants/${mutant.id}/registration.json` }),
-      enqueue('record_deposit', { agentId: mutant.id, amount }),
-    ]);
+    // Register enqueues transfer_nft and record_deposit after it gets the on-chain agentId
+    await enqueue('register', { mutantId: mutant.id, depositAmount: amount });
 
     return NextResponse.json(
       {

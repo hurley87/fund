@@ -18,7 +18,7 @@ async function getMutants(): Promise<Mutant[]> {
   return DEMO_MUTANTS;
 }
 
-const STATUSES = ["all", "active", "benched", "culled", "awaiting_deposit"] as const;
+const STATUSES = ["all", "active", "benched", "axed", "awaiting_deposit"] as const;
 
 export default async function DashboardPage({
   searchParams,

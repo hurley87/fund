@@ -60,7 +60,7 @@ export async function GET(request: Request) {
     survivors: 0,
     offspring: 0,
     explorers: 0,
-    culled: 0,
+    axed: 0,
     benched: 0,
     small_population_mode: false,
     errors: [] as string[],
@@ -205,7 +205,7 @@ export async function GET(request: Request) {
       elite_ids: elites.map((e) => e.mutant.id),
       survivor_ids: survivors.map((s) => s.mutant.id),
       offspring_ids: offspringIds,
-      culled_ids: [],
+      axed_ids: [],
       tier_counts: {
         elites: summary.elites,
         survivors: summary.survivors,

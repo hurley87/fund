@@ -45,9 +45,9 @@ export async function POST(request: Request) {
         { status: 404 },
       );
     }
-    if (mutant.lifecycle_status === 'culled') {
+    if (mutant.lifecycle_status === 'axed') {
       return NextResponse.json(
-        { error: 'Your mutant is culled. Use POST /api/invest with agent_id to revive it.' },
+        { error: 'Your mutant is axed. Use POST /api/invest with agent_id to revive it.' },
         { status: 400 },
       );
     }

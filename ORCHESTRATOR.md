@@ -6,9 +6,9 @@
 
 **Mutant Fund** — a decentralized autonomous hedge fund for the Synthesis hackathon (deadline: 2026-03-22). AI trading agents evolve strategies via natural selection on Base. Deposit USDC → mint an ERC-8004 NFT mutant → strategies compete and evolve.
 
-## Current State (2026-03-21)
+## Current State (2026-03-22)
 
-**Core implementation complete.** All 16 GitHub issues built. TypeScript compiles clean. No tests exist.
+**Core implementation complete.** All 16 GitHub issues built. TypeScript compiles clean. No tests exist. **tx-queue wired to real on-chain calls** (ERC-8004 register, NFT transfer, accounting contract).
 
 **MutantAccounting contract deployed** to Base mainnet at `0x31598c93FA964cB38A92f0a604Dc8289A6D60b18`. Owner: `0xBe523e724B9Ea7D618dD093f14618D90c4B19b0c`.
 
@@ -86,12 +86,12 @@ Agent → Send USDC to treasury on Base
 | File | Purpose |
 |------|---------|
 | `src/lib/personality/generate.ts` | `generatePersonality()` (gpt-4o-mini), `generateImage()` (DALL-E 3), `uploadImage()` (Supabase storage) |
-| `src/lib/queue/tx-queue.ts` | `enqueue()`, `processQueue()` — FIFO serial tx processing. **executeTx is placeholder** (console.log, returns fake hash) |
+| `src/lib/queue/tx-queue.ts` | `enqueue()`, `processQueue()` — FIFO serial tx processing. `executeTx` wired to real on-chain calls: `register` → ERC-8004 + update agent_id + enqueue transfer_nft + record_deposit; `transfer_nft` → NFT to owner; `record_deposit/settlement/withdrawal` → MutantAccounting contract via viem. |
 
 ### API Routes
 | Route | Method | Purpose |
 |-------|--------|---------|
-| `/api/invest` | POST | Spawn new mutant or revive culled one. Requires `tx_hash` proving USDC transfer to treasury. One mutant per wallet. |
+| `/api/invest` | POST | Spawn new mutant or revive axed one. Requires `tx_hash` proving USDC transfer to treasury. One mutant per wallet. |
 | `/api/fund` | POST | Top up existing mutant's bankroll. Requires `tx_hash` proving USDC transfer to treasury. |
 | `/api/redeem` | POST | Withdraw USDC. Checks NFT ownership via `ownerOf()`, checks withdrawable balance, checks no open positions. |
 | `/api/mutants` | GET | List all mutants, optionally filtered by `?status=` |
@@ -135,12 +135,11 @@ Agent → Send USDC to treasury on Base
 - On-chain USDC transfer verification replaced trust-based JSON body (no more fake deposits)
 - One mutant per wallet enforced; top-ups via `/api/fund`
 - Genome stored in DB with `_raw` field for crossover/mutation compatibility
-- Revival path: culled mutants revived with new deposit + fresh genome + personality
+- Revival path: axed mutants revived with new deposit + fresh genome + personality
 - Explorers (random genomes) added each evolution cycle to maintain genetic diversity
 
 ## Known Risks & Gaps
 
-- **tx-queue executeTx is a placeholder** — console.log + fake hash, not wired to real onchain calls
 - **No tests** of any kind
 - **No real signature verification** in redeem — trusts `signer` field
 - **DexScreener rate limits** need handling in production
